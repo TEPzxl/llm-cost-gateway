@@ -12,6 +12,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AdminAuditLog struct {
+	ID                uuid.UUID  `db:"id" json:"id"`
+	OrgID             uuid.UUID  `db:"org_id" json:"org_id"`
+	ActorAdminTokenID uuid.UUID  `db:"actor_admin_token_id" json:"actor_admin_token_id"`
+	Action            string     `db:"action" json:"action"`
+	ResourceType      string     `db:"resource_type" json:"resource_type"`
+	ResourceID        *uuid.UUID `db:"resource_id" json:"resource_id"`
+	RequestID         string     `db:"request_id" json:"request_id"`
+	CreatedAt         time.Time  `db:"created_at" json:"created_at"`
+}
+
 type AdminToken struct {
 	ID          uuid.UUID  `db:"id" json:"id"`
 	OrgID       uuid.UUID  `db:"org_id" json:"org_id"`
