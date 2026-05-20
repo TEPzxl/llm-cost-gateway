@@ -8,10 +8,11 @@ import { formValue, numberValue, preventDefault, type PageProps } from "./pageUt
 export function ProvidersPage({ client }: PageProps) {
   const [items, setItems] = useState<Provider[]>([]);
   const [providerType, setProviderType] = useState<"mock" | "openai_compatible">("mock");
+  const [checkingID, setCheckingID] = useState("");
   const [error, setError] = useState("");
 
   async function load() {
-    const response = await client.listProviders();
+    const response = await client.listProviderHealth();
     setItems(response.items);
   }
 
@@ -44,6 +45,19 @@ export function ProvidersPage({ client }: PageProps) {
     form.reset();
     setProviderType("mock");
     await load();
+  }
+
+  async function checkHealth(id: string) {
+    setCheckingID(id);
+    setError("");
+    try {
+      await client.checkProviderHealth(id);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Health check failed.");
+    } finally {
+      setCheckingID("");
+    }
   }
 
   return (
@@ -95,10 +109,49 @@ export function ProvidersPage({ client }: PageProps) {
             { key: "type", header: "Type", render: (item) => item.type },
             { key: "base", header: "Base URL", render: (item) => item.base_url ?? "-" },
             { key: "timeout", header: "Timeout", render: (item) => item.timeout_ms },
-            { key: "status", header: "Status", render: (item) => item.status }
+            { key: "status", header: "Status", render: (item) => item.status },
+            {
+              key: "health",
+              header: "Health",
+              render: (item) => (
+                <span className={`status-pill ${item.last_health_status ?? "unknown"}`}>
+                  {item.last_health_status ?? "unknown"}
+                </span>
+              )
+            },
+            {
+              key: "checked",
+              header: "Checked",
+              render: (item) => formatDateTime(item.last_health_checked_at)
+            },
+            { key: "error", header: "Last Error", render: (item) => item.last_error_code ?? "-" },
+            {
+              key: "actions",
+              header: "Actions",
+              render: (item) => (
+                <button
+                  className="button-secondary"
+                  type="button"
+                  onClick={() => checkHealth(item.id)}
+                  disabled={checkingID === item.id}
+                >
+                  {checkingID === item.id ? "Checking" : "Check"}
+                </button>
+              )
+            }
           ]}
         />
       </section>
     </div>
   );
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) {
+    return "-";
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "short",
+    timeStyle: "short"
+  }).format(new Date(value));
 }

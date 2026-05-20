@@ -34,6 +34,10 @@ export type Provider = {
   api_key?: string | null;
   status: string;
   timeout_ms: number;
+  last_health_status?: "healthy" | "unhealthy" | string | null;
+  last_health_checked_at?: string | null;
+  last_error_code?: string | null;
+  last_error_message?: string | null;
   created_at: string;
 };
 

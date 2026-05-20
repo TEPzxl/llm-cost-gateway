@@ -50,3 +50,32 @@ test("returns plaintext API key from create response once to caller", async () =
 
   assert.equal(created.key, "llmgw_live_plain");
 });
+
+test("posts provider health check request", async () => {
+  const calls = [];
+  const client = createApiClient({
+    baseUrl: "http://gateway.test",
+    getToken: () => "llmgw_admin_test",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return new Response(
+        JSON.stringify({
+          id: "00000000-0000-0000-0000-000000000001",
+          name: "mock-provider",
+          type: "mock",
+          status: "active",
+          timeout_ms: 30000,
+          last_health_status: "healthy",
+          created_at: "2026-05-20T00:00:00Z"
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  });
+
+  const checked = await client.checkProviderHealth("00000000-0000-0000-0000-000000000001");
+
+  assert.equal(calls[0].url, "http://gateway.test/api/v1/admin/providers/00000000-0000-0000-0000-000000000001/health-check");
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(checked.last_health_status, "healthy");
+});

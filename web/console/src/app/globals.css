@@ -302,6 +302,28 @@ th {
   margin-top: 10px;
 }
 
+.status-pill {
+  display: inline-flex;
+  min-width: 72px;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: #eef2f7;
+  color: #526174;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.status-pill.healthy {
+  background: #e8f7ee;
+  color: #17643a;
+}
+
+.status-pill.unhealthy {
+  background: #fff0ed;
+  color: #9f1d14;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

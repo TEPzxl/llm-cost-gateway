@@ -77,6 +77,12 @@ export function createApiClient(options: ApiClientOptions) {
         method: "POST",
         body: JSON.stringify(body)
       }),
+    listProviderHealth: () =>
+      request<ListResponse<Provider>>("/api/v1/admin/providers/health"),
+    checkProviderHealth: (id: string) =>
+      request<Provider>(`/api/v1/admin/providers/${id}/health-check`, {
+        method: "POST"
+      }),
     listModels: () => request<ListResponse<Model>>("/api/v1/admin/models"),
     createModel: (body: CreateModelRequest) =>
       request<Model>("/api/v1/admin/models", {
