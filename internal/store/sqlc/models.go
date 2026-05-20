@@ -55,6 +55,35 @@ type Budget struct {
 	UpdatedAt     time.Time  `db:"updated_at" json:"updated_at"`
 }
 
+type BudgetAlert struct {
+	ID            uuid.UUID   `db:"id" json:"id"`
+	OrgID         uuid.UUID   `db:"org_id" json:"org_id"`
+	BudgetID      uuid.UUID   `db:"budget_id" json:"budget_id"`
+	WebhookUrl    string      `db:"webhook_url" json:"webhook_url"`
+	WebhookSecret pgtype.Text `db:"webhook_secret" json:"webhook_secret"`
+	Status        string      `db:"status" json:"status"`
+	CreatedAt     time.Time   `db:"created_at" json:"created_at"`
+	UpdatedAt     time.Time   `db:"updated_at" json:"updated_at"`
+}
+
+type BudgetAlertDelivery struct {
+	ID                uuid.UUID   `db:"id" json:"id"`
+	OrgID             uuid.UUID   `db:"org_id" json:"org_id"`
+	BudgetAlertID     uuid.UUID   `db:"budget_alert_id" json:"budget_alert_id"`
+	BudgetID          uuid.UUID   `db:"budget_id" json:"budget_id"`
+	Threshold         int32       `db:"threshold" json:"threshold"`
+	Period            string      `db:"period" json:"period"`
+	PeriodWindowStart time.Time   `db:"period_window_start" json:"period_window_start"`
+	PeriodWindowEnd   time.Time   `db:"period_window_end" json:"period_window_end"`
+	UsedMicroUsd      int64       `db:"used_micro_usd" json:"used_micro_usd"`
+	LimitMicroUsd     int64       `db:"limit_micro_usd" json:"limit_micro_usd"`
+	WebhookUrl        string      `db:"webhook_url" json:"webhook_url"`
+	Status            string      `db:"status" json:"status"`
+	HttpStatus        pgtype.Int4 `db:"http_status" json:"http_status"`
+	ErrorMessage      pgtype.Text `db:"error_message" json:"error_message"`
+	CreatedAt         time.Time   `db:"created_at" json:"created_at"`
+}
+
 type CostRecord struct {
 	ID              uuid.UUID       `db:"id" json:"id"`
 	UsageRecordID   uuid.UUID       `db:"usage_record_id" json:"usage_record_id"`
