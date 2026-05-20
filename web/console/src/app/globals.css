@@ -256,6 +256,13 @@ th {
   gap: 12px;
 }
 
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
 .metric-card {
   border: 1px solid #dce4ef;
   border-radius: 8px;
@@ -303,6 +310,22 @@ th {
   padding: 10px;
 }
 
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.segmented .button-secondary {
+  min-width: 92px;
+}
+
+.segmented .button-secondary.active {
+  border-color: #165d91;
+  background: #e8f4ff;
+  color: #165d91;
+}
+
 .alert.error {
   background: #fff0ed;
   color: #9f1d14;
@@ -338,7 +361,8 @@ th {
   }
 
   .form-grid,
-  .metric-grid {
+  .metric-grid,
+  .dashboard-grid {
     grid-template-columns: 1fr;
   }
 

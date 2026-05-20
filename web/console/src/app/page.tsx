@@ -4,10 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { createApiClient } from "../api/client";
 import { Layout, type ConsolePage } from "../components/Layout";
 import { APIKeysPage } from "../routes/APIKeysPage";
+import { BudgetsPage } from "../routes/BudgetsPage";
+import { DashboardPage } from "../routes/DashboardPage";
 import { LoginPage } from "../routes/LoginPage";
 import { ModelsPage } from "../routes/ModelsPage";
 import { ProvidersPage } from "../routes/ProvidersPage";
+import { RequestLogsPage } from "../routes/RequestLogsPage";
 import { RoutePoliciesPage } from "../routes/RoutePoliciesPage";
+import { UsageSummaryPage } from "../routes/UsageSummaryPage";
 
 const tokenKey = "llmgw_admin_token";
 
@@ -41,17 +45,14 @@ export default function HomePage() {
         setToken(null);
       }}
     >
+      {activePage === "dashboard" && <DashboardPage client={client} />}
       {activePage === "api-keys" && <APIKeysPage client={client} />}
       {activePage === "providers" && <ProvidersPage client={client} />}
       {activePage === "models" && <ModelsPage client={client} />}
       {activePage === "route-policies" && <RoutePoliciesPage client={client} />}
-      {!["api-keys", "providers", "models", "route-policies"].includes(activePage) && (
-        <section className="panel">
-          <p className="eyebrow">Selected page</p>
-          <h2>{activePage}</h2>
-          <p className="muted">This page will be implemented next.</p>
-        </section>
-      )}
+      {activePage === "budgets" && <BudgetsPage client={client} />}
+      {activePage === "request-logs" && <RequestLogsPage client={client} />}
+      {activePage === "usage-summary" && <UsageSummaryPage client={client} />}
     </Layout>
   );
 }
