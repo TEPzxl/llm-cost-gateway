@@ -55,8 +55,28 @@ type ChatResponse struct {
 	RawUsage           map[string]any
 }
 
+type StreamUsage struct {
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+	Raw              map[string]any
+}
+
+type StreamEvent struct {
+	Data  string
+	Usage *StreamUsage
+	Done  bool
+}
+
+type ChatStream interface {
+	Events() <-chan StreamEvent
+	Err() error
+	Close() error
+}
+
 type Adapter interface {
 	Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
+	StreamChat(ctx context.Context, req ChatRequest) (ChatStream, error)
 }
 
 type Error struct {

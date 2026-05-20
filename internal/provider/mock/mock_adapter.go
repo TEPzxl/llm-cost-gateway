@@ -2,6 +2,7 @@ package mock
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/tep/llm-cost-gateway/internal/domain"
@@ -80,4 +81,80 @@ func (a *Adapter) Chat(ctx context.Context, req contract.ChatRequest) (*contract
 			"total_tokens":      mockPromptTokens + mockCompletionTokens,
 		},
 	}, nil
+}
+
+func (a *Adapter) StreamChat(ctx context.Context, req contract.ChatRequest) (contract.ChatStream, error) {
+	stream := &mockStream{events: make(chan contract.StreamEvent, 3)}
+	go func() {
+		defer close(stream.events)
+		if a.delay > 0 {
+			timer := time.NewTimer(a.delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				stream.err = contract.NewError(domain.CodeProviderTimeout, "mock provider context cancelled", ctx.Err())
+				return
+			case <-timer.C:
+			}
+		}
+		if a.err != nil {
+			stream.err = a.err
+			return
+		}
+
+		stream.events <- contract.StreamEvent{Data: mustJSON(map[string]any{
+			"id": "mock_" + req.RequestID,
+			"choices": []map[string]any{
+				{
+					"index": 0,
+					"delta": map[string]string{
+						"role":    "assistant",
+						"content": "Mock response",
+					},
+				},
+			},
+		})}
+		usage := &contract.StreamUsage{
+			PromptTokens:     mockPromptTokens,
+			CompletionTokens: mockCompletionTokens,
+			TotalTokens:      mockPromptTokens + mockCompletionTokens,
+			Raw: map[string]any{
+				"prompt_tokens":     mockPromptTokens,
+				"completion_tokens": mockCompletionTokens,
+				"total_tokens":      mockPromptTokens + mockCompletionTokens,
+			},
+		}
+		stream.events <- contract.StreamEvent{Data: mustJSON(map[string]any{
+			"id":      "mock_" + req.RequestID,
+			"choices": []map[string]any{},
+			"usage":   usage.Raw,
+		}), Usage: usage}
+		stream.events <- contract.StreamEvent{Data: "[DONE]", Done: true}
+	}()
+	return stream, nil
+}
+
+type mockStream struct {
+	events chan contract.StreamEvent
+	err    error
+}
+
+func (s *mockStream) Events() <-chan contract.StreamEvent {
+	return s.events
+}
+
+func (s *mockStream) Err() error {
+	return s.err
+}
+
+func (s *mockStream) Close() error {
+	return nil
+}
+
+func mustJSON(value any) string {
+	body, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return string(body)
 }

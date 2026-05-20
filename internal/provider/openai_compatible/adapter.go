@@ -122,6 +122,10 @@ func (a *Adapter) Chat(ctx context.Context, req contract.ChatRequest) (*contract
 	}, nil
 }
 
+func (a *Adapter) StreamChat(context.Context, contract.ChatRequest) (contract.ChatStream, error) {
+	return nil, contract.NewError(domain.CodeStreamNotSupported, "stream is not supported", nil)
+}
+
 type upstreamRequest struct {
 	Model       string                 `json:"model"`
 	Messages    []contract.ChatMessage `json:"messages"`
