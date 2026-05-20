@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/tep/llm-cost-gateway/internal/audit"
 	"github.com/tep/llm-cost-gateway/internal/auth"
 	"github.com/tep/llm-cost-gateway/internal/budget"
 	"github.com/tep/llm-cost-gateway/internal/costing"
@@ -95,6 +96,7 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	routePolicyService := routing.NewService(cfg.Store)
 	budgetService := budget.NewService(cfg.Store.Queries)
 	budgetAlertService := budget.NewAlertService(cfg.Store)
+	auditService := audit.NewAdminAuditService(cfg.Store.Queries)
 	meHandler := admin.NewMeHandler(cfg.Store.Queries)
 	apiKeyHandler := admin.NewAPIKeyHandler(apiKeyService)
 	providerHandler := admin.NewProviderHandler(providerService)
@@ -108,6 +110,7 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 
 	group := router.Group("/api/v1/admin")
 	group.Use(middleware.AdminTokenAuth(adminTokenService))
+	group.Use(middleware.AdminAudit(auditService))
 	group.GET("/me", meHandler.Get)
 	group.POST("/api-keys", apiKeyHandler.Create)
 	group.GET("/api-keys", apiKeyHandler.List)

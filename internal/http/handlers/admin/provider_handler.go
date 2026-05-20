@@ -74,6 +74,8 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 		return
 	}
 
+	middleware.SetAdminAuditResource(c, "provider", created.ID)
+	middleware.SetAdminAuditAction(c, "create_provider")
 	httpapi.RespondJSON(c, http.StatusCreated, newProviderResponse(created))
 }
 

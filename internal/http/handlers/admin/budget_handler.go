@@ -88,6 +88,8 @@ func (h *BudgetHandler) Create(c *gin.Context) {
 		return
 	}
 
+	middleware.SetAdminAuditResource(c, "budget", created.ID)
+	middleware.SetAdminAuditAction(c, "create_budget")
 	httpapi.RespondJSON(c, http.StatusCreated, newBudgetResponse(created))
 }
 
