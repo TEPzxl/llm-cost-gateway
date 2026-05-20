@@ -31,6 +31,7 @@ type ChatService struct {
 	registry            *provider.Registry
 	budgets             *budget.Service
 	alerts              *budget.AlertService
+	apiKeyQuotas        *auth.APIKeyQuotaService
 	metering            *metering.Service
 	metrics             *observability.Metrics
 	retryPolicy         RetryPolicy
@@ -110,6 +111,7 @@ func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observ
 		registry:            provider.NewRegistry(),
 		budgets:             budget.NewService(st.Queries),
 		alerts:              budget.NewAlertService(st),
+		apiKeyQuotas:        auth.NewAPIKeyQuotaService(st.Queries),
 		metering:            metering.NewService(st, costing.NewCalculator()),
 		metrics:             metrics,
 		retryPolicy:         retryPolicy.Normalize(),
@@ -145,6 +147,16 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 		s.metrics.IncBudgetBlocked()
 		s.metrics.ObserveGatewayRequest("budget_blocked", "", request.Model, s.clock().Sub(startedAt))
 		return ChatResult{}, domain.NewError(http.StatusPaymentRequired, domain.CodeBudgetExceeded, "budget exceeded")
+	}
+	quotaCheck, err := s.apiKeyQuotas.Check(ctx, input.Principal)
+	if err != nil {
+		return ChatResult{}, err
+	}
+	if !quotaCheck.Allowed {
+		metadata := apiKeyQuotaMetadata(quotaCheck)
+		_ = s.recordFailure(ctx, input, request.Model, metering.StatusBudgetBlocked, http.StatusPaymentRequired, domain.CodeAPIKeyQuotaExceeded, "", nil, nil, metadata, startedAt)
+		s.metrics.ObserveGatewayRequest("api_key_quota_blocked", "", request.Model, s.clock().Sub(startedAt))
+		return ChatResult{}, domain.NewError(http.StatusPaymentRequired, domain.CodeAPIKeyQuotaExceeded, "api key quota exceeded")
 	}
 
 	resolved, err := s.resolver.ResolveTargets(ctx, routing.ResolveParams{
@@ -231,7 +243,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 			lastStatus = http.StatusServiceUnavailable
 			lastCode = domain.CodeProviderUnavailable
 		}
-		metadata := chatMetadata(budgetCheck, attempts, includeFallbackMetadata, includeFallbackMetadata || hasRetriedTarget(attempts))
+		metadata := chatMetadata(budgetCheck, quotaCheck, attempts, includeFallbackMetadata, includeFallbackMetadata || hasRetriedTarget(attempts))
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, lastStatus, lastCode, "", &selected.Provider.ID, &selected.Model.ID, metadata, startedAt)
 		s.metrics.ObserveGatewayRequest("error", selected.Provider.Name, request.Model, s.clock().Sub(startedAt))
 		return ChatResult{}, domain.NewError(lastStatus, lastCode, "provider request failed")
@@ -242,7 +254,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	if providerLatencyMS == 0 {
 		providerLatencyMS = int32(s.clock().Sub(providerStarted).Milliseconds())
 	}
-	metadata := chatMetadata(budgetCheck, attempts, includeFallbackMetadata, includeFallbackMetadata || hasRetriedTarget(attempts))
+	metadata := chatMetadata(budgetCheck, quotaCheck, attempts, includeFallbackMetadata, includeFallbackMetadata || hasRetriedTarget(attempts))
 	successStatus := metering.StatusSuccess
 	if budgetCheck.Warning {
 		successStatus = metering.StatusBudgetWarned
@@ -461,10 +473,13 @@ func hasRetriedTarget(attempts []providerAttemptMetadata) bool {
 	return false
 }
 
-func chatMetadata(result budget.CheckResult, attempts []providerAttemptMetadata, includeFallback bool, includeAttempts bool) *json.RawMessage {
+func chatMetadata(result budget.CheckResult, quotaResult auth.APIKeyQuotaCheckResult, attempts []providerAttemptMetadata, includeFallback bool, includeAttempts bool) *json.RawMessage {
 	body := map[string]any{}
 	if budgetBody := budgetMetadataBody(result); budgetBody != nil {
 		body["budget"] = budgetBody
+	}
+	if quotaBody := apiKeyQuotaMetadataBody(quotaResult); quotaBody != nil {
+		body["api_key_quota"] = quotaBody
 	}
 	if includeFallback {
 		fallbackCount := len(attempts) - 1
@@ -498,6 +513,38 @@ func budgetMetadata(result budget.CheckResult) *json.RawMessage {
 	}
 	raw := json.RawMessage(rawBody)
 	return &raw
+}
+
+func apiKeyQuotaMetadata(result auth.APIKeyQuotaCheckResult) *json.RawMessage {
+	body := apiKeyQuotaMetadataBody(result)
+	if body == nil {
+		return nil
+	}
+	rawBody, err := json.Marshal(map[string]any{"api_key_quota": body})
+	if err != nil {
+		return nil
+	}
+	raw := json.RawMessage(rawBody)
+	return &raw
+}
+
+func apiKeyQuotaMetadataBody(result auth.APIKeyQuotaCheckResult) map[string]any {
+	if result.Status == nil {
+		return nil
+	}
+	return map[string]any{
+		"id":                   result.Status.APIKey.ID,
+		"action":               result.Action,
+		"used_micro_usd":       result.Status.UsedMicroUSD,
+		"limit_micro_usd":      result.Status.LimitMicroUSD,
+		"remaining_micro_usd":  result.Status.RemainingMicroUSD,
+		"exceeded":             result.Status.Exceeded,
+		"period":               result.Status.Period,
+		"window_start":         result.Status.WindowStart,
+		"window_end":           result.Status.WindowEnd,
+		"pre_check_only":       true,
+		"projected_cost_known": false,
+	}
 }
 
 func budgetMetadataBody(result budget.CheckResult) map[string]any {

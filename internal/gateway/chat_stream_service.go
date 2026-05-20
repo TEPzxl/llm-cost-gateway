@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/tep/llm-cost-gateway/internal/auth"
 	"github.com/tep/llm-cost-gateway/internal/budget"
 	"github.com/tep/llm-cost-gateway/internal/domain"
 	"github.com/tep/llm-cost-gateway/internal/metering"
@@ -21,6 +22,7 @@ type ChatStreamResult struct {
 	request           ChatCompletionRequest
 	resolved          routing.ResolveResult
 	budgetCheck       budget.CheckResult
+	quotaCheck        auth.APIKeyQuotaCheckResult
 	startedAt         time.Time
 	providerStartedAt time.Time
 }
@@ -48,6 +50,16 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 		s.metrics.ObserveGatewayRequest("budget_blocked", "", request.Model, s.clock().Sub(startedAt))
 		return nil, domain.NewError(http.StatusPaymentRequired, domain.CodeBudgetExceeded, "budget exceeded")
 	}
+	quotaCheck, err := s.apiKeyQuotas.Check(ctx, input.Principal)
+	if err != nil {
+		return nil, err
+	}
+	if !quotaCheck.Allowed {
+		metadata := apiKeyQuotaMetadata(quotaCheck)
+		_ = s.recordFailure(ctx, input, request.Model, metering.StatusBudgetBlocked, http.StatusPaymentRequired, domain.CodeAPIKeyQuotaExceeded, "", nil, nil, metadata, startedAt)
+		s.metrics.ObserveGatewayRequest("api_key_quota_blocked", "", request.Model, s.clock().Sub(startedAt))
+		return nil, domain.NewError(http.StatusPaymentRequired, domain.CodeAPIKeyQuotaExceeded, "api key quota exceeded")
+	}
 
 	resolved, err := s.resolver.Resolve(ctx, routing.ResolveParams{
 		OrgID:          input.Principal.OrgID,
@@ -64,13 +76,13 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 
 	adapter, err := s.registry.AdapterFor(resolved.Provider.Type)
 	if err != nil {
-		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "", &resolved.Provider.ID, &resolved.Model.ID, nil, startedAt)
+		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "", &resolved.Provider.ID, &resolved.Model.ID, streamMetadata(budgetCheck, quotaCheck, false), startedAt)
 		s.metrics.ObserveGatewayRequest("error", resolved.Provider.Name, request.Model, s.clock().Sub(startedAt))
 		return nil, domain.NewError(http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "provider unavailable")
 	}
 	providerConfig, err := s.providerConfig(ctx, resolved.Provider)
 	if err != nil {
-		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "", &resolved.Provider.ID, &resolved.Model.ID, nil, startedAt)
+		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "", &resolved.Provider.ID, &resolved.Model.ID, streamMetadata(budgetCheck, quotaCheck, false), startedAt)
 		s.metrics.ObserveGatewayRequest("error", resolved.Provider.Name, request.Model, s.clock().Sub(startedAt))
 		return nil, domain.NewError(http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "provider unavailable")
 	}
@@ -88,7 +100,7 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 	})
 	if err != nil {
 		status, code := providerErrorStatus(err)
-		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, status, code, "", &resolved.Provider.ID, &resolved.Model.ID, nil, startedAt)
+		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, status, code, "", &resolved.Provider.ID, &resolved.Model.ID, streamMetadata(budgetCheck, quotaCheck, false), startedAt)
 		s.metrics.ObserveProviderRequest(resolved.Provider.Name, request.Model, "error", code)
 		s.metrics.ObserveGatewayRequest("error", resolved.Provider.Name, request.Model, s.clock().Sub(startedAt))
 		return nil, domain.NewError(status, code, "provider request failed")
@@ -100,6 +112,7 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 		request:           request,
 		resolved:          resolved,
 		budgetCheck:       budgetCheck,
+		quotaCheck:        quotaCheck,
 		startedAt:         startedAt,
 		providerStartedAt: providerStartedAt,
 	}, nil
@@ -108,7 +121,7 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 func (s *ChatService) FinalizeStream(ctx context.Context, result *ChatStreamResult, usage *contract.StreamUsage, streamErr error) error {
 	providerLatencyMS := int32(s.clock().Sub(result.providerStartedAt).Milliseconds())
 	completedAt := s.clock()
-	metadata := streamMetadata(result.budgetCheck, usage == nil)
+	metadata := streamMetadata(result.budgetCheck, result.quotaCheck, usage == nil)
 	if streamErr != nil {
 		status, code := providerErrorStatus(streamErr)
 		err := s.recordFailure(ctx, result.input, result.request.Model, metering.StatusError, status, code, "", &result.resolved.Provider.ID, &result.resolved.Model.ID, metadata, result.startedAt)
@@ -184,27 +197,18 @@ func (s *ChatService) FinalizeStream(ctx context.Context, result *ChatStreamResu
 	return nil
 }
 
-func streamMetadata(result budget.CheckResult, usageMissing bool) *json.RawMessage {
+func streamMetadata(result budget.CheckResult, quotaResult auth.APIKeyQuotaCheckResult, usageMissing bool) *json.RawMessage {
 	body := map[string]any{
 		"stream": true,
 	}
 	if usageMissing {
 		body["usage_missing"] = true
 	}
-	if result.Status != nil {
-		body["budget"] = map[string]any{
-			"id":                   result.Status.Budget.ID,
-			"action":               result.Action,
-			"used_micro_usd":       result.Status.UsedMicroUSD,
-			"limit_micro_usd":      result.Status.Budget.LimitMicroUsd,
-			"remaining_micro_usd":  result.Status.RemainingMicroUSD,
-			"exceeded":             result.Status.Exceeded,
-			"period":               result.Status.Budget.Period,
-			"window_start":         result.Status.WindowStart,
-			"window_end":           result.Status.WindowEnd,
-			"pre_check_only":       true,
-			"projected_cost_known": false,
-		}
+	if budgetBody := budgetMetadataBody(result); budgetBody != nil {
+		body["budget"] = budgetBody
+	}
+	if quotaBody := apiKeyQuotaMetadataBody(quotaResult); quotaBody != nil {
+		body["api_key_quota"] = quotaBody
 	}
 	rawBody, err := json.Marshal(body)
 	if err != nil {

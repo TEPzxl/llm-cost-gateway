@@ -493,6 +493,51 @@ func TestGatewayChatCompletionsBudgetWarnRecordsWarning(t *testing.T) {
 	assertAppRequestLogStatus(t, ctx, st, "budget_warned")
 }
 
+func TestGatewayChatCompletionsAPIKeyQuotaBlockWritesRequestLog(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	blockedKey := createAPIKeyViaHTTP(t, router, apiKey.AdminToken, createAPIKeyRequest{
+		Name:                   "blocked-quota-key",
+		Scopes:                 []string{"chat.completions"},
+		RPMLimit:               60,
+		DailyCostLimitMicroUSD: int64Ptr(0),
+		QuotaAction:            "block",
+	})
+
+	rec := performChatCompletion(t, router, blockedKey.Key, `{"model":"fast-chat","messages":[{"role":"user","content":"hello"}]}`)
+	assertGatewayError(t, rec, http.StatusPaymentRequired, "api_key_quota_exceeded")
+
+	assertAppTableCount(t, ctx, st, "request_logs", 1)
+	assertAppTableCount(t, ctx, st, "usage_records", 0)
+	assertAppTableCount(t, ctx, st, "cost_records", 0)
+	assertAppRequestLogStatus(t, ctx, st, "budget_blocked")
+	assertAppRequestLogErrorCode(t, ctx, st, "api_key_quota_exceeded")
+	assertAppRequestLogAPIKeyQuota(t, ctx, st, "daily", "block", true)
+}
+
+func TestGatewayChatCompletionsAPIKeyQuotaWarnRecordsMetadata(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	warnKey := createAPIKeyViaHTTP(t, router, apiKey.AdminToken, createAPIKeyRequest{
+		Name:                   "warn-quota-key",
+		Scopes:                 []string{"chat.completions"},
+		RPMLimit:               60,
+		DailyCostLimitMicroUSD: int64Ptr(0),
+		QuotaAction:            "warn",
+	})
+
+	rec := performChatCompletion(t, router, warnKey.Key, `{"model":"fast-chat","messages":[{"role":"user","content":"hello"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /v1/chat/completions status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	assertAppTableCount(t, ctx, st, "request_logs", 1)
+	assertAppTableCount(t, ctx, st, "usage_records", 1)
+	assertAppTableCount(t, ctx, st, "cost_records", 1)
+	assertAppRequestLogStatus(t, ctx, st, "success")
+	assertAppRequestLogAPIKeyQuota(t, ctx, st, "daily", "warn", true)
+}
+
 type fakeGatewayLimiter struct {
 	decision ratelimit.Decision
 	err      error
@@ -670,6 +715,29 @@ func assertAppRequestLogTargetAttempts(t *testing.T, ctx context.Context, st *st
 	}
 	if got != want {
 		t.Fatalf("target attempts = %d, want %d", got, want)
+	}
+}
+
+func assertAppRequestLogAPIKeyQuota(t *testing.T, ctx context.Context, st *store.Store, wantPeriod string, wantAction string, wantExceeded bool) {
+	t.Helper()
+
+	var period string
+	var action string
+	var exceeded bool
+	if err := st.Pool.QueryRow(ctx, `
+		SELECT
+			metadata->'api_key_quota'->>'period',
+			metadata->'api_key_quota'->>'action',
+			(metadata->'api_key_quota'->>'exceeded')::boolean
+		FROM request_logs
+		ORDER BY started_at DESC
+		LIMIT 1
+	`).Scan(&period, &action, &exceeded); err != nil {
+		t.Fatalf("select latest request log api_key_quota metadata: %v", err)
+	}
+	if period != wantPeriod || action != wantAction || exceeded != wantExceeded {
+		t.Fatalf("api_key_quota metadata = period:%q action:%q exceeded:%t, want period:%q action:%q exceeded:%t",
+			period, action, exceeded, wantPeriod, wantAction, wantExceeded)
 	}
 }
 
