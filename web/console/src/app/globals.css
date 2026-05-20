@@ -235,6 +235,15 @@ th {
   gap: 12px;
 }
 
+.page-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.span-2 {
+  grid-column: span 2;
+}
+
 .form-actions {
   display: flex;
   gap: 8px;
@@ -284,6 +293,16 @@ th {
   color: #184a72;
 }
 
+.secret-block {
+  display: block;
+  overflow-wrap: anywhere;
+  margin: 8px 0;
+  border-radius: 6px;
+  background: #f4f7fb;
+  color: #152033;
+  padding: 10px;
+}
+
 .alert.error {
   background: #fff0ed;
   color: #9f1d14;
@@ -321,5 +340,9 @@ th {
   .form-grid,
   .metric-grid {
     grid-template-columns: 1fr;
+  }
+
+  .span-2 {
+    grid-column: span 1;
   }
 }
