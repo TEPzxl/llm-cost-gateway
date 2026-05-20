@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -75,6 +76,57 @@ func TestAdminRequestLogsTimeFiltering(t *testing.T) {
 	}
 }
 
+func TestAdminRequestLogsCursorPagination(t *testing.T) {
+	router, _, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	for i := 0; i < 3; i++ {
+		rec := performChatCompletion(t, router, apiKey.Key, `{"model":"fast-chat","messages":[{"role":"user","content":"hello"}]}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("chat completion %d status = %d, want %d; body=%s", i, rec.Code, http.StatusOK, rec.Body.String())
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	first := getRequestLogsViaHTTP(t, router, apiKey.AdminToken, "limit=1")
+	if len(first.Items) != 1 || first.NextCursor == nil {
+		t.Fatalf("first page = %+v, want one item and next cursor", first)
+	}
+	second := getRequestLogsViaHTTP(t, router, apiKey.AdminToken, "limit=1&cursor="+url.QueryEscape(*first.NextCursor))
+	if len(second.Items) != 1 || second.NextCursor == nil {
+		t.Fatalf("second page = %+v, want one item and next cursor", second)
+	}
+	if second.Items[0].ID == first.Items[0].ID {
+		t.Fatalf("second page repeated id %s", second.Items[0].ID)
+	}
+	third := getRequestLogsViaHTTP(t, router, apiKey.AdminToken, "limit=1&cursor="+url.QueryEscape(*second.NextCursor))
+	if len(third.Items) != 1 {
+		t.Fatalf("third page count = %d, want 1", len(third.Items))
+	}
+	if third.Items[0].ID == first.Items[0].ID || third.Items[0].ID == second.Items[0].ID {
+		t.Fatalf("third page repeated id %s", third.Items[0].ID)
+	}
+}
+
+func TestAdminRequestLogsFilterByErrorCodeAndRequestModel(t *testing.T) {
+	router, _, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"fast-chat","messages":[{"role":"user","content":"hello"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("chat completion status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	missing := performChatCompletion(t, router, apiKey.Key, `{"model":"missing-model","messages":[{"role":"user","content":"hello"}]}`)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing route status = %d, want %d; body=%s", missing.Code, http.StatusNotFound, missing.Body.String())
+	}
+
+	errorLogs := getRequestLogsViaHTTP(t, router, apiKey.AdminToken, "error_code=route_not_found")
+	if len(errorLogs.Items) != 1 || errorLogs.Items[0].ErrorCode == nil || *errorLogs.Items[0].ErrorCode != "route_not_found" {
+		t.Fatalf("error_code filtered logs = %+v, want one route_not_found", errorLogs.Items)
+	}
+	modelLogs := getRequestLogsViaHTTP(t, router, apiKey.AdminToken, "request_model=fast-chat")
+	if len(modelLogs.Items) != 1 || modelLogs.Items[0].RequestModel == nil || *modelLogs.Items[0].RequestModel != "fast-chat" {
+		t.Fatalf("request_model filtered logs = %+v, want one fast-chat", modelLogs.Items)
+	}
+}
+
 func TestAdminUsageRoutesAreScopedByOrg(t *testing.T) {
 	router, _, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
 	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"fast-chat","messages":[{"role":"user","content":"hello"}]}`)
@@ -96,8 +148,11 @@ func TestAdminUsageRoutesAreScopedByOrg(t *testing.T) {
 
 type requestLogsRouteResponse struct {
 	Items []struct {
-		Status     string `json:"status"`
-		StatusCode int32  `json:"status_code"`
+		ID           string  `json:"id"`
+		RequestModel *string `json:"request_model"`
+		Status       string  `json:"status"`
+		StatusCode   int32   `json:"status_code"`
+		ErrorCode    *string `json:"error_code"`
 	} `json:"items"`
 	NextCursor *string `json:"next_cursor"`
 }

@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -51,6 +53,11 @@ type listRequestLogsResponse struct {
 	NextCursor *string              `json:"next_cursor"`
 }
 
+type requestLogCursor struct {
+	StartedAt time.Time `json:"started_at"`
+	ID        uuid.UUID `json:"id"`
+}
+
 func (h *RequestLogHandler) List(c *gin.Context) {
 	principal, ok := middleware.AdminTokenPrincipalFromContext(c)
 	if !ok {
@@ -66,18 +73,15 @@ func (h *RequestLogHandler) List(c *gin.Context) {
 	if !ok {
 		return
 	}
-	offset, ok := parseBoundedInt32(c, "offset", 0, 1_000_000)
-	if !ok {
-		return
-	}
 
 	params := db.ListRequestLogsParams{
-		OrgID:  principal.OrgID,
-		FromAt: window.from,
-		ToAt:   window.to,
-		Limit:  limit,
-		Offset: offset,
-		Status: pgText(c.Query("status")),
+		OrgID:        principal.OrgID,
+		FromAt:       window.from,
+		ToAt:         window.to,
+		Limit:        limit + 1,
+		Status:       pgText(c.Query("status")),
+		ErrorCode:    pgText(c.Query("error_code")),
+		RequestModel: pgText(c.Query("request_model")),
 	}
 	var err error
 	if params.ApiKeyID, err = parseOptionalUUID(c, "api_key_id"); err != nil {
@@ -92,17 +96,33 @@ func (h *RequestLogHandler) List(c *gin.Context) {
 		httpapi.RespondError(c, httpapi.InvalidRequest("invalid model_id"))
 		return
 	}
+	if cursorValue := c.Query("cursor"); cursorValue != "" {
+		cursor, err := decodeRequestLogCursor(cursorValue)
+		if err != nil {
+			httpapi.RespondError(c, httpapi.InvalidRequest("invalid cursor"))
+			return
+		}
+		params.CursorStartedAt = &cursor.StartedAt
+		params.CursorID = &cursor.ID
+	}
 
 	logs, err := h.queries.ListRequestLogs(c.Request.Context(), params)
 	if err != nil {
 		httpapi.RespondError(c, httpapi.InternalError("internal server error"))
 		return
 	}
+	var nextCursor *string
+	if int32(len(logs)) > limit {
+		logs = logs[:int(limit)]
+		last := logs[len(logs)-1]
+		encoded := encodeRequestLogCursor(requestLogCursor{StartedAt: last.StartedAt, ID: last.ID})
+		nextCursor = &encoded
+	}
 	items := make([]requestLogResponse, 0, len(logs))
 	for _, item := range logs {
 		items = append(items, newRequestLogResponse(item))
 	}
-	httpapi.RespondJSON(c, http.StatusOK, listRequestLogsResponse{Items: items})
+	httpapi.RespondJSON(c, http.StatusOK, listRequestLogsResponse{Items: items, NextCursor: nextCursor})
 }
 
 type timeWindow struct {
@@ -196,4 +216,28 @@ func int4Ptr(value pgtype.Int4) *int32 {
 		return nil
 	}
 	return &value.Int32
+}
+
+func encodeRequestLogCursor(cursor requestLogCursor) string {
+	body, err := json.Marshal(cursor)
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(body)
+}
+
+func decodeRequestLogCursor(value string) (requestLogCursor, error) {
+	body, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return requestLogCursor{}, err
+	}
+	var cursor requestLogCursor
+	if err := json.Unmarshal(body, &cursor); err != nil {
+		return requestLogCursor{}, err
+	}
+	if cursor.StartedAt.IsZero() || cursor.ID == uuid.Nil {
+		return requestLogCursor{}, strconv.ErrSyntax
+	}
+	cursor.StartedAt = cursor.StartedAt.UTC()
+	return cursor, nil
 }

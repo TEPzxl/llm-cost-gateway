@@ -116,24 +116,32 @@ WHERE org_id = $1
   AND started_at >= $2
   AND started_at < $3
   AND ($4::text IS NULL OR status = $4::text)
-  AND ($5::uuid IS NULL OR api_key_id = $5::uuid)
-  AND ($6::uuid IS NULL OR provider_id = $6::uuid)
-  AND ($7::uuid IS NULL OR model_id = $7::uuid)
+  AND ($5::text IS NULL OR error_code = $5::text)
+  AND ($6::text IS NULL OR request_model = $6::text)
+  AND ($7::uuid IS NULL OR api_key_id = $7::uuid)
+  AND ($8::uuid IS NULL OR provider_id = $8::uuid)
+  AND ($9::uuid IS NULL OR model_id = $9::uuid)
+  AND (
+    $10::timestamptz IS NULL
+    OR (started_at, id) < ($10::timestamptz, $11::uuid)
+  )
 ORDER BY started_at DESC, id DESC
-LIMIT $9
-OFFSET $8
+LIMIT $12
 `
 
 type ListRequestLogsParams struct {
-	OrgID      uuid.UUID   `db:"org_id" json:"org_id"`
-	FromAt     time.Time   `db:"from_at" json:"from_at"`
-	ToAt       time.Time   `db:"to_at" json:"to_at"`
-	Status     pgtype.Text `db:"status" json:"status"`
-	ApiKeyID   *uuid.UUID  `db:"api_key_id" json:"api_key_id"`
-	ProviderID *uuid.UUID  `db:"provider_id" json:"provider_id"`
-	ModelID    *uuid.UUID  `db:"model_id" json:"model_id"`
-	Offset     int32       `db:"offset" json:"offset"`
-	Limit      int32       `db:"limit" json:"limit"`
+	OrgID           uuid.UUID   `db:"org_id" json:"org_id"`
+	FromAt          time.Time   `db:"from_at" json:"from_at"`
+	ToAt            time.Time   `db:"to_at" json:"to_at"`
+	Status          pgtype.Text `db:"status" json:"status"`
+	ErrorCode       pgtype.Text `db:"error_code" json:"error_code"`
+	RequestModel    pgtype.Text `db:"request_model" json:"request_model"`
+	ApiKeyID        *uuid.UUID  `db:"api_key_id" json:"api_key_id"`
+	ProviderID      *uuid.UUID  `db:"provider_id" json:"provider_id"`
+	ModelID         *uuid.UUID  `db:"model_id" json:"model_id"`
+	CursorStartedAt *time.Time  `db:"cursor_started_at" json:"cursor_started_at"`
+	CursorID        *uuid.UUID  `db:"cursor_id" json:"cursor_id"`
+	Limit           int32       `db:"limit" json:"limit"`
 }
 
 func (q *Queries) ListRequestLogs(ctx context.Context, arg ListRequestLogsParams) ([]RequestLog, error) {
@@ -142,10 +150,13 @@ func (q *Queries) ListRequestLogs(ctx context.Context, arg ListRequestLogsParams
 		arg.FromAt,
 		arg.ToAt,
 		arg.Status,
+		arg.ErrorCode,
+		arg.RequestModel,
 		arg.ApiKeyID,
 		arg.ProviderID,
 		arg.ModelID,
-		arg.Offset,
+		arg.CursorStartedAt,
+		arg.CursorID,
 		arg.Limit,
 	)
 	if err != nil {
