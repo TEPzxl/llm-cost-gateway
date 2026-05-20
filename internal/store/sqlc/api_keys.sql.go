@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createAPIKey = `-- name: CreateAPIKey :one
@@ -22,24 +23,30 @@ INSERT INTO api_keys (
   scopes,
   status,
   rpm_limit,
+  daily_cost_limit_micro_usd,
+  monthly_cost_limit_micro_usd,
+  quota_action,
   expires_at,
   created_at
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
-) RETURNING id, org_id, name, key_prefix, key_hash, scopes, status, rpm_limit, expires_at, last_used_at, created_at, revoked_at
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+) RETURNING id, org_id, name, key_prefix, key_hash, scopes, status, rpm_limit, expires_at, last_used_at, created_at, revoked_at, daily_cost_limit_micro_usd, monthly_cost_limit_micro_usd, quota_action
 `
 
 type CreateAPIKeyParams struct {
-	ID        uuid.UUID  `db:"id" json:"id"`
-	OrgID     uuid.UUID  `db:"org_id" json:"org_id"`
-	Name      string     `db:"name" json:"name"`
-	KeyPrefix string     `db:"key_prefix" json:"key_prefix"`
-	KeyHash   string     `db:"key_hash" json:"key_hash"`
-	Scopes    []string   `db:"scopes" json:"scopes"`
-	Status    string     `db:"status" json:"status"`
-	RpmLimit  int32      `db:"rpm_limit" json:"rpm_limit"`
-	ExpiresAt *time.Time `db:"expires_at" json:"expires_at"`
-	CreatedAt time.Time  `db:"created_at" json:"created_at"`
+	ID                       uuid.UUID   `db:"id" json:"id"`
+	OrgID                    uuid.UUID   `db:"org_id" json:"org_id"`
+	Name                     string      `db:"name" json:"name"`
+	KeyPrefix                string      `db:"key_prefix" json:"key_prefix"`
+	KeyHash                  string      `db:"key_hash" json:"key_hash"`
+	Scopes                   []string    `db:"scopes" json:"scopes"`
+	Status                   string      `db:"status" json:"status"`
+	RpmLimit                 int32       `db:"rpm_limit" json:"rpm_limit"`
+	DailyCostLimitMicroUsd   pgtype.Int8 `db:"daily_cost_limit_micro_usd" json:"daily_cost_limit_micro_usd"`
+	MonthlyCostLimitMicroUsd pgtype.Int8 `db:"monthly_cost_limit_micro_usd" json:"monthly_cost_limit_micro_usd"`
+	QuotaAction              string      `db:"quota_action" json:"quota_action"`
+	ExpiresAt                *time.Time  `db:"expires_at" json:"expires_at"`
+	CreatedAt                time.Time   `db:"created_at" json:"created_at"`
 }
 
 func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (ApiKey, error) {
@@ -52,6 +59,9 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (Api
 		arg.Scopes,
 		arg.Status,
 		arg.RpmLimit,
+		arg.DailyCostLimitMicroUsd,
+		arg.MonthlyCostLimitMicroUsd,
+		arg.QuotaAction,
 		arg.ExpiresAt,
 		arg.CreatedAt,
 	)
@@ -69,12 +79,15 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (Api
 		&i.LastUsedAt,
 		&i.CreatedAt,
 		&i.RevokedAt,
+		&i.DailyCostLimitMicroUsd,
+		&i.MonthlyCostLimitMicroUsd,
+		&i.QuotaAction,
 	)
 	return i, err
 }
 
 const getAPIKey = `-- name: GetAPIKey :one
-SELECT id, org_id, name, key_prefix, key_hash, scopes, status, rpm_limit, expires_at, last_used_at, created_at, revoked_at
+SELECT id, org_id, name, key_prefix, key_hash, scopes, status, rpm_limit, expires_at, last_used_at, created_at, revoked_at, daily_cost_limit_micro_usd, monthly_cost_limit_micro_usd, quota_action
 FROM api_keys
 WHERE org_id = $1 AND id = $2
 `
@@ -100,12 +113,15 @@ func (q *Queries) GetAPIKey(ctx context.Context, arg GetAPIKeyParams) (ApiKey, e
 		&i.LastUsedAt,
 		&i.CreatedAt,
 		&i.RevokedAt,
+		&i.DailyCostLimitMicroUsd,
+		&i.MonthlyCostLimitMicroUsd,
+		&i.QuotaAction,
 	)
 	return i, err
 }
 
 const getAPIKeyByHash = `-- name: GetAPIKeyByHash :one
-SELECT id, org_id, name, key_prefix, key_hash, scopes, status, rpm_limit, expires_at, last_used_at, created_at, revoked_at
+SELECT id, org_id, name, key_prefix, key_hash, scopes, status, rpm_limit, expires_at, last_used_at, created_at, revoked_at, daily_cost_limit_micro_usd, monthly_cost_limit_micro_usd, quota_action
 FROM api_keys
 WHERE key_hash = $1
 `
@@ -126,12 +142,46 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, 
 		&i.LastUsedAt,
 		&i.CreatedAt,
 		&i.RevokedAt,
+		&i.DailyCostLimitMicroUsd,
+		&i.MonthlyCostLimitMicroUsd,
+		&i.QuotaAction,
 	)
 	return i, err
 }
 
+const getAPIKeyCostUsedAmount = `-- name: GetAPIKeyCostUsedAmount :one
+SELECT COALESCE(SUM(cr.total_cost_micro), 0)::bigint AS used_micro_usd
+FROM cost_records cr
+JOIN usage_records ur
+  ON ur.org_id = cr.org_id
+ AND ur.id = cr.usage_record_id
+WHERE cr.org_id = $1
+  AND ur.api_key_id = $2
+  AND cr.created_at >= $3
+  AND cr.created_at < $4
+`
+
+type GetAPIKeyCostUsedAmountParams struct {
+	OrgID       uuid.UUID `db:"org_id" json:"org_id"`
+	ApiKeyID    uuid.UUID `db:"api_key_id" json:"api_key_id"`
+	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	CreatedAt_2 time.Time `db:"created_at_2" json:"created_at_2"`
+}
+
+func (q *Queries) GetAPIKeyCostUsedAmount(ctx context.Context, arg GetAPIKeyCostUsedAmountParams) (int64, error) {
+	row := q.db.QueryRow(ctx, getAPIKeyCostUsedAmount,
+		arg.OrgID,
+		arg.ApiKeyID,
+		arg.CreatedAt,
+		arg.CreatedAt_2,
+	)
+	var used_micro_usd int64
+	err := row.Scan(&used_micro_usd)
+	return used_micro_usd, err
+}
+
 const listAPIKeys = `-- name: ListAPIKeys :many
-SELECT id, org_id, name, key_prefix, key_hash, scopes, status, rpm_limit, expires_at, last_used_at, created_at, revoked_at
+SELECT id, org_id, name, key_prefix, key_hash, scopes, status, rpm_limit, expires_at, last_used_at, created_at, revoked_at, daily_cost_limit_micro_usd, monthly_cost_limit_micro_usd, quota_action
 FROM api_keys
 WHERE org_id = $1
 ORDER BY created_at DESC, id DESC
@@ -159,6 +209,9 @@ func (q *Queries) ListAPIKeys(ctx context.Context, orgID uuid.UUID) ([]ApiKey, e
 			&i.LastUsedAt,
 			&i.CreatedAt,
 			&i.RevokedAt,
+			&i.DailyCostLimitMicroUsd,
+			&i.MonthlyCostLimitMicroUsd,
+			&i.QuotaAction,
 		); err != nil {
 			return nil, err
 		}
@@ -175,7 +228,7 @@ UPDATE api_keys
 SET status = 'revoked',
     revoked_at = $3
 WHERE org_id = $1 AND id = $2
-RETURNING id, org_id, name, key_prefix, key_hash, scopes, status, rpm_limit, expires_at, last_used_at, created_at, revoked_at
+RETURNING id, org_id, name, key_prefix, key_hash, scopes, status, rpm_limit, expires_at, last_used_at, created_at, revoked_at, daily_cost_limit_micro_usd, monthly_cost_limit_micro_usd, quota_action
 `
 
 type RevokeAPIKeyParams struct {
@@ -200,6 +253,9 @@ func (q *Queries) RevokeAPIKey(ctx context.Context, arg RevokeAPIKeyParams) (Api
 		&i.LastUsedAt,
 		&i.CreatedAt,
 		&i.RevokedAt,
+		&i.DailyCostLimitMicroUsd,
+		&i.MonthlyCostLimitMicroUsd,
+		&i.QuotaAction,
 	)
 	return i, err
 }

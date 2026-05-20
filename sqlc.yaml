@@ -6,6 +6,7 @@ sql:
       - db/migrations/000002_route_fallback.up.sql
       - db/migrations/000003_provider_health.up.sql
       - db/migrations/000004_budget_alerts.up.sql
+      - db/migrations/000005_api_key_quota.up.sql
     queries: db/query
     gen:
       go:

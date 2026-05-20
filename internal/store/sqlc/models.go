@@ -27,18 +27,21 @@ type AdminToken struct {
 }
 
 type ApiKey struct {
-	ID         uuid.UUID  `db:"id" json:"id"`
-	OrgID      uuid.UUID  `db:"org_id" json:"org_id"`
-	Name       string     `db:"name" json:"name"`
-	KeyPrefix  string     `db:"key_prefix" json:"key_prefix"`
-	KeyHash    string     `db:"key_hash" json:"key_hash"`
-	Scopes     []string   `db:"scopes" json:"scopes"`
-	Status     string     `db:"status" json:"status"`
-	RpmLimit   int32      `db:"rpm_limit" json:"rpm_limit"`
-	ExpiresAt  *time.Time `db:"expires_at" json:"expires_at"`
-	LastUsedAt *time.Time `db:"last_used_at" json:"last_used_at"`
-	CreatedAt  time.Time  `db:"created_at" json:"created_at"`
-	RevokedAt  *time.Time `db:"revoked_at" json:"revoked_at"`
+	ID                       uuid.UUID   `db:"id" json:"id"`
+	OrgID                    uuid.UUID   `db:"org_id" json:"org_id"`
+	Name                     string      `db:"name" json:"name"`
+	KeyPrefix                string      `db:"key_prefix" json:"key_prefix"`
+	KeyHash                  string      `db:"key_hash" json:"key_hash"`
+	Scopes                   []string    `db:"scopes" json:"scopes"`
+	Status                   string      `db:"status" json:"status"`
+	RpmLimit                 int32       `db:"rpm_limit" json:"rpm_limit"`
+	ExpiresAt                *time.Time  `db:"expires_at" json:"expires_at"`
+	LastUsedAt               *time.Time  `db:"last_used_at" json:"last_used_at"`
+	CreatedAt                time.Time   `db:"created_at" json:"created_at"`
+	RevokedAt                *time.Time  `db:"revoked_at" json:"revoked_at"`
+	DailyCostLimitMicroUsd   pgtype.Int8 `db:"daily_cost_limit_micro_usd" json:"daily_cost_limit_micro_usd"`
+	MonthlyCostLimitMicroUsd pgtype.Int8 `db:"monthly_cost_limit_micro_usd" json:"monthly_cost_limit_micro_usd"`
+	QuotaAction              string      `db:"quota_action" json:"quota_action"`
 }
 
 type Budget struct {
