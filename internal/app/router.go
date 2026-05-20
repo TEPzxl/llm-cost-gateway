@@ -93,6 +93,7 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	providerHealthService := provider.NewHealthService(cfg.Store, cfg.SecretEncryptionKey)
 	routePolicyService := routing.NewService(cfg.Store)
 	budgetService := budget.NewService(cfg.Store.Queries)
+	budgetAlertService := budget.NewAlertService(cfg.Store)
 	meHandler := admin.NewMeHandler(cfg.Store.Queries)
 	apiKeyHandler := admin.NewAPIKeyHandler(apiKeyService)
 	providerHandler := admin.NewProviderHandler(providerService)
@@ -100,6 +101,7 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	modelHandler := admin.NewModelHandler(providerService)
 	routePolicyHandler := admin.NewRoutePolicyHandler(routePolicyService)
 	budgetHandler := admin.NewBudgetHandler(budgetService)
+	budgetAlertHandler := admin.NewBudgetAlertHandler(budgetAlertService)
 	requestLogHandler := admin.NewRequestLogHandler(cfg.Store.Queries)
 	usageHandler := admin.NewUsageHandler(cfg.Store.Queries)
 
@@ -120,6 +122,9 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	group.POST("/budgets", budgetHandler.Create)
 	group.GET("/budgets", budgetHandler.List)
 	group.GET("/budgets/status", budgetHandler.Status)
+	group.POST("/budget-alerts", budgetAlertHandler.Create)
+	group.GET("/budget-alerts", budgetAlertHandler.List)
+	group.GET("/budget-alert-deliveries", budgetAlertHandler.ListDeliveries)
 	group.GET("/request-logs", requestLogHandler.List)
 	group.GET("/usage/summary", usageHandler.Summary)
 }

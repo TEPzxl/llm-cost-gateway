@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tep/llm-cost-gateway/internal/budget"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 )
 
@@ -108,6 +109,66 @@ func TestAdminBudgetRoutesRejectInvalidRequest(t *testing.T) {
 	}
 }
 
+func TestAdminBudgetAlertRoutesCreateListAndDeliveries(t *testing.T) {
+	ctx := context.Background()
+	router, st := newTask5TestRouter(t)
+	orgID := createOrgViaHTTP(t, router, "Budget Alert Org", "budget-alert-org")
+	adminToken := createAdminTokenViaHTTP(t, router, orgID)
+	apiKey := createAPIKeyViaHTTP(t, router, adminToken.Token, createAPIKeyRequest{
+		Name:     "budget-alert-key",
+		Scopes:   []string{"chat.completions"},
+		RPMLimit: 60,
+	})
+	provider := createProviderViaHTTP(t, router, adminToken.Token, createProviderRequest{
+		Name:      "budget-alert-provider",
+		Type:      "mock",
+		TimeoutMS: 30000,
+	})
+	model := createModelViaHTTP(t, router, adminToken.Token, createModelRequest{
+		ProviderID:                     provider.ID,
+		ProviderModelName:              "budget-alert-model",
+		DisplayName:                    "Budget Alert Model",
+		InputPriceMicroUSDPer1KTokens:  100,
+		OutputPriceMicroUSDPer1KTokens: 200,
+	})
+	budgetItem := createBudgetViaHTTP(t, router, adminToken.Token, createBudgetRequest{
+		Name:          "alert-budget",
+		ScopeType:     "org",
+		Period:        "monthly",
+		LimitMicroUSD: 1000,
+		Action:        "warn",
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	alert := createBudgetAlertViaHTTP(t, router, adminToken.Token, createBudgetAlertRequest{
+		BudgetID:      budgetItem.ID,
+		WebhookURL:    server.URL,
+		WebhookSecret: "secret",
+		Status:        "active",
+	})
+	if alert.BudgetID != budgetItem.ID || alert.WebhookURL != server.URL {
+		t.Fatalf("created alert = %+v", alert)
+	}
+	rawList := listBudgetAlertsRawViaHTTP(t, router, adminToken.Token)
+	if strings.Contains(rawList, "secret") {
+		t.Fatalf("budget alert list leaked webhook secret: %s", rawList)
+	}
+
+	insertAppBudgetCost(t, ctx, st.Queries, orgID, apiKey.ID, provider.ID, model.ID, 800, time.Now().UTC())
+	alertService := budget.NewAlertService(st)
+	if _, err := alertService.CheckAndDeliver(ctx, orgID); err != nil {
+		t.Fatalf("CheckAndDeliver returned error: %v", err)
+	}
+
+	deliveries := listBudgetAlertDeliveriesViaHTTP(t, router, adminToken.Token)
+	if len(deliveries.Items) != 1 || deliveries.Items[0].Threshold != 80 || deliveries.Items[0].Status != "success" {
+		t.Fatalf("deliveries = %+v, want one successful 80 delivery", deliveries.Items)
+	}
+}
+
 type createBudgetRequest struct {
 	Name          string     `json:"name"`
 	ScopeType     string     `json:"scope_type"`
@@ -144,6 +205,33 @@ type budgetStatusRouteResponse struct {
 	} `json:"items"`
 }
 
+type createBudgetAlertRequest struct {
+	BudgetID      uuid.UUID `json:"budget_id"`
+	WebhookURL    string    `json:"webhook_url"`
+	WebhookSecret string    `json:"webhook_secret"`
+	Status        string    `json:"status"`
+}
+
+type budgetAlertRouteResponse struct {
+	ID         uuid.UUID `json:"id"`
+	BudgetID   uuid.UUID `json:"budget_id"`
+	WebhookURL string    `json:"webhook_url"`
+	Status     string    `json:"status"`
+}
+
+type budgetAlertDeliveryRouteResponse struct {
+	ID            uuid.UUID `json:"id"`
+	BudgetAlertID uuid.UUID `json:"budget_alert_id"`
+	BudgetID      uuid.UUID `json:"budget_id"`
+	Threshold     int32     `json:"threshold"`
+	Status        string    `json:"status"`
+	HTTPStatus    *int32    `json:"http_status"`
+}
+
+type listBudgetAlertDeliveriesRouteResponse struct {
+	Items []budgetAlertDeliveryRouteResponse `json:"items"`
+}
+
 func createBudgetViaHTTP(t *testing.T, router http.Handler, adminToken string, body createBudgetRequest) budgetRouteResponse {
 	t.Helper()
 
@@ -165,6 +253,60 @@ func createBudgetViaHTTP(t *testing.T, router http.Handler, adminToken string, b
 	var response budgetRouteResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode create budget response: %v", err)
+	}
+	return response
+}
+
+func createBudgetAlertViaHTTP(t *testing.T, router http.Handler, adminToken string, body createBudgetAlertRequest) budgetAlertRouteResponse {
+	t.Helper()
+
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal create budget alert request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/budget-alerts", strings.NewReader(string(payload)))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /api/v1/admin/budget-alerts status = %d, want %d; body=%s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var response budgetAlertRouteResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode create budget alert response: %v", err)
+	}
+	return response
+}
+
+func listBudgetAlertsRawViaHTTP(t *testing.T, router http.Handler, adminToken string) string {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/budget-alerts", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/admin/budget-alerts status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	return rec.Body.String()
+}
+
+func listBudgetAlertDeliveriesViaHTTP(t *testing.T, router http.Handler, adminToken string) listBudgetAlertDeliveriesRouteResponse {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/budget-alert-deliveries", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/admin/budget-alert-deliveries status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var response listBudgetAlertDeliveriesRouteResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode budget alert deliveries response: %v", err)
 	}
 	return response
 }

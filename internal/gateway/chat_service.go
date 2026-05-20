@@ -30,6 +30,7 @@ type ChatService struct {
 	resolver            *routing.Resolver
 	registry            *provider.Registry
 	budgets             *budget.Service
+	alerts              *budget.AlertService
 	metering            *metering.Service
 	metrics             *observability.Metrics
 	retryPolicy         RetryPolicy
@@ -108,6 +109,7 @@ func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observ
 		resolver:            routing.NewResolver(st.Queries),
 		registry:            provider.NewRegistry(),
 		budgets:             budget.NewService(st.Queries),
+		alerts:              budget.NewAlertService(st),
 		metering:            metering.NewService(st, costing.NewCalculator()),
 		metrics:             metrics,
 		retryPolicy:         retryPolicy.Normalize(),
@@ -274,6 +276,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	if err != nil {
 		return ChatResult{}, err
 	}
+	_, _ = s.alerts.CheckAndDeliver(ctx, input.Principal.OrgID)
 	statusLabel := "success"
 	if budgetCheck.Warning {
 		statusLabel = metering.StatusBudgetWarned

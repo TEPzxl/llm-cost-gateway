@@ -400,6 +400,46 @@ func TestGatewayChatCompletionsRetriesProviderTimeout(t *testing.T) {
 	assertAppRequestLogTargetAttempts(t, ctx, st, 2)
 }
 
+func TestGatewayChatCompletionsTriggersBudgetAlertWithoutBlockingResponse(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	createBudgetViaHTTP(t, router, apiKey.AdminToken, createBudgetRequest{
+		Name:          "gateway-alert-budget",
+		ScopeType:     "org",
+		Period:        "monthly",
+		LimitMicroUSD: 8,
+		Action:        "warn",
+	})
+	budgets := listBudgetsViaHTTP(t, router, apiKey.AdminToken)
+	if len(budgets.Items) != 1 {
+		t.Fatalf("budget count = %d, want 1", len(budgets.Items))
+	}
+	createBudgetAlertViaHTTP(t, router, apiKey.AdminToken, createBudgetAlertRequest{
+		BudgetID:   budgets.Items[0].ID,
+		WebhookURL: server.URL,
+		Status:     "active",
+	})
+
+	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"fast-chat","messages":[{"role":"user","content":"hello"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("chat status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("webhook calls = %d, want 3 thresholds", got)
+	}
+	assertAppTableCount(t, ctx, st, "request_logs", 1)
+	assertAppTableCount(t, ctx, st, "usage_records", 1)
+	assertAppTableCount(t, ctx, st, "cost_records", 1)
+	assertAppBudgetAlertDeliveryCount(t, ctx, st, 3)
+}
+
 func TestGatewayChatCompletionsRouteNotFound(t *testing.T) {
 	router, _, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
 
@@ -630,6 +670,18 @@ func assertAppRequestLogTargetAttempts(t *testing.T, ctx context.Context, st *st
 	}
 	if got != want {
 		t.Fatalf("target attempts = %d, want %d", got, want)
+	}
+}
+
+func assertAppBudgetAlertDeliveryCount(t *testing.T, ctx context.Context, st *store.Store, want int) {
+	t.Helper()
+
+	var got int
+	if err := st.Pool.QueryRow(ctx, `SELECT count(*)::int FROM budget_alert_deliveries`).Scan(&got); err != nil {
+		t.Fatalf("count budget_alert_deliveries: %v", err)
+	}
+	if got != want {
+		t.Fatalf("budget_alert_deliveries count = %d, want %d", got, want)
 	}
 }
 
