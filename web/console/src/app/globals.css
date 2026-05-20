@@ -326,7 +326,7 @@ th {
 
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
 }
 
@@ -348,6 +348,73 @@ th {
   margin-top: 6px;
   font-size: 24px;
   font-weight: 800;
+}
+
+.column-chart {
+  display: grid;
+  min-height: 220px;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.column-item {
+  display: grid;
+  min-width: 0;
+  height: 220px;
+  grid-template-rows: auto 1fr auto;
+  gap: 8px;
+}
+
+.column-value,
+.column-label,
+.breakdown-value,
+.breakdown-label {
+  overflow: hidden;
+  color: #526174;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.column-track {
+  display: flex;
+  min-height: 140px;
+  align-items: end;
+  border-radius: 6px;
+  background: #eef3f8;
+  padding: 4px;
+}
+
+.column-bar {
+  width: 100%;
+  border-radius: 4px;
+  background: #165d91;
+}
+
+.breakdown-chart {
+  display: grid;
+  gap: 12px;
+}
+
+.breakdown-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(160px, 2fr) minmax(88px, auto);
+  gap: 10px;
+  align-items: center;
+}
+
+.breakdown-track {
+  height: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eef3f8;
+}
+
+.breakdown-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: #2f7d62;
 }
 
 .table-shell {
