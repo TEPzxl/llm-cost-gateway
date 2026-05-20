@@ -188,3 +188,45 @@ func (q *Queries) ListModelsByProvider(ctx context.Context, arg ListModelsByProv
 	}
 	return items, nil
 }
+
+const updateModelPricing = `-- name: UpdateModelPricing :one
+UPDATE models
+SET input_price_micro_usd_per_1k_tokens = $3,
+    output_price_micro_usd_per_1k_tokens = $4,
+    updated_at = $5
+WHERE org_id = $1 AND id = $2
+RETURNING id, org_id, provider_id, provider_model_name, display_name, input_price_micro_usd_per_1k_tokens, output_price_micro_usd_per_1k_tokens, context_window, status, created_at, updated_at
+`
+
+type UpdateModelPricingParams struct {
+	OrgID                          uuid.UUID `db:"org_id" json:"org_id"`
+	ID                             uuid.UUID `db:"id" json:"id"`
+	InputPriceMicroUsdPer1kTokens  int64     `db:"input_price_micro_usd_per_1k_tokens" json:"input_price_micro_usd_per_1k_tokens"`
+	OutputPriceMicroUsdPer1kTokens int64     `db:"output_price_micro_usd_per_1k_tokens" json:"output_price_micro_usd_per_1k_tokens"`
+	UpdatedAt                      time.Time `db:"updated_at" json:"updated_at"`
+}
+
+func (q *Queries) UpdateModelPricing(ctx context.Context, arg UpdateModelPricingParams) (Model, error) {
+	row := q.db.QueryRow(ctx, updateModelPricing,
+		arg.OrgID,
+		arg.ID,
+		arg.InputPriceMicroUsdPer1kTokens,
+		arg.OutputPriceMicroUsdPer1kTokens,
+		arg.UpdatedAt,
+	)
+	var i Model
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.ProviderID,
+		&i.ProviderModelName,
+		&i.DisplayName,
+		&i.InputPriceMicroUsdPer1kTokens,
+		&i.OutputPriceMicroUsdPer1kTokens,
+		&i.ContextWindow,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}

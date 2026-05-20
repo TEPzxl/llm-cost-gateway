@@ -31,3 +31,11 @@ SELECT *
 FROM models
 WHERE org_id = $1 AND provider_id = $2
 ORDER BY created_at DESC, id DESC;
+
+-- name: UpdateModelPricing :one
+UPDATE models
+SET input_price_micro_usd_per_1k_tokens = $3,
+    output_price_micro_usd_per_1k_tokens = $4,
+    updated_at = $5
+WHERE org_id = $1 AND id = $2
+RETURNING *;

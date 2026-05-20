@@ -26,10 +26,11 @@ INSERT INTO cost_records (
   input_cost_micro,
   output_cost_micro,
   total_cost_micro,
+  pricing_version_id,
   pricing_snapshot,
   created_at
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
 ) RETURNING *;
 
 -- name: UsageSummaryByProvider :many

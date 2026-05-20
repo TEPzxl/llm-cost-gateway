@@ -88,17 +88,18 @@ type BudgetAlertDelivery struct {
 }
 
 type CostRecord struct {
-	ID              uuid.UUID       `db:"id" json:"id"`
-	UsageRecordID   uuid.UUID       `db:"usage_record_id" json:"usage_record_id"`
-	OrgID           uuid.UUID       `db:"org_id" json:"org_id"`
-	ProviderID      uuid.UUID       `db:"provider_id" json:"provider_id"`
-	ModelID         uuid.UUID       `db:"model_id" json:"model_id"`
-	Currency        string          `db:"currency" json:"currency"`
-	InputCostMicro  int64           `db:"input_cost_micro" json:"input_cost_micro"`
-	OutputCostMicro int64           `db:"output_cost_micro" json:"output_cost_micro"`
-	TotalCostMicro  int64           `db:"total_cost_micro" json:"total_cost_micro"`
-	PricingSnapshot json.RawMessage `db:"pricing_snapshot" json:"pricing_snapshot"`
-	CreatedAt       time.Time       `db:"created_at" json:"created_at"`
+	ID               uuid.UUID       `db:"id" json:"id"`
+	UsageRecordID    uuid.UUID       `db:"usage_record_id" json:"usage_record_id"`
+	OrgID            uuid.UUID       `db:"org_id" json:"org_id"`
+	ProviderID       uuid.UUID       `db:"provider_id" json:"provider_id"`
+	ModelID          uuid.UUID       `db:"model_id" json:"model_id"`
+	Currency         string          `db:"currency" json:"currency"`
+	InputCostMicro   int64           `db:"input_cost_micro" json:"input_cost_micro"`
+	OutputCostMicro  int64           `db:"output_cost_micro" json:"output_cost_micro"`
+	TotalCostMicro   int64           `db:"total_cost_micro" json:"total_cost_micro"`
+	PricingSnapshot  json.RawMessage `db:"pricing_snapshot" json:"pricing_snapshot"`
+	CreatedAt        time.Time       `db:"created_at" json:"created_at"`
+	PricingVersionID *uuid.UUID      `db:"pricing_version_id" json:"pricing_version_id"`
 }
 
 type Model struct {
@@ -113,6 +114,19 @@ type Model struct {
 	Status                         string      `db:"status" json:"status"`
 	CreatedAt                      time.Time   `db:"created_at" json:"created_at"`
 	UpdatedAt                      time.Time   `db:"updated_at" json:"updated_at"`
+}
+
+type ModelPricingVersion struct {
+	ID                             uuid.UUID  `db:"id" json:"id"`
+	OrgID                          uuid.UUID  `db:"org_id" json:"org_id"`
+	ModelID                        uuid.UUID  `db:"model_id" json:"model_id"`
+	Version                        int32      `db:"version" json:"version"`
+	InputPriceMicroUsdPer1kTokens  int64      `db:"input_price_micro_usd_per_1k_tokens" json:"input_price_micro_usd_per_1k_tokens"`
+	OutputPriceMicroUsdPer1kTokens int64      `db:"output_price_micro_usd_per_1k_tokens" json:"output_price_micro_usd_per_1k_tokens"`
+	Status                         string     `db:"status" json:"status"`
+	EffectiveFrom                  time.Time  `db:"effective_from" json:"effective_from"`
+	EffectiveTo                    *time.Time `db:"effective_to" json:"effective_to"`
+	CreatedAt                      time.Time  `db:"created_at" json:"created_at"`
 }
 
 type Organization struct {

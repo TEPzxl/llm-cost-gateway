@@ -24,25 +24,27 @@ INSERT INTO cost_records (
   input_cost_micro,
   output_cost_micro,
   total_cost_micro,
+  pricing_version_id,
   pricing_snapshot,
   created_at
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
-) RETURNING id, usage_record_id, org_id, provider_id, model_id, currency, input_cost_micro, output_cost_micro, total_cost_micro, pricing_snapshot, created_at
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+) RETURNING id, usage_record_id, org_id, provider_id, model_id, currency, input_cost_micro, output_cost_micro, total_cost_micro, pricing_snapshot, created_at, pricing_version_id
 `
 
 type InsertCostRecordParams struct {
-	ID              uuid.UUID       `db:"id" json:"id"`
-	UsageRecordID   uuid.UUID       `db:"usage_record_id" json:"usage_record_id"`
-	OrgID           uuid.UUID       `db:"org_id" json:"org_id"`
-	ProviderID      uuid.UUID       `db:"provider_id" json:"provider_id"`
-	ModelID         uuid.UUID       `db:"model_id" json:"model_id"`
-	Currency        string          `db:"currency" json:"currency"`
-	InputCostMicro  int64           `db:"input_cost_micro" json:"input_cost_micro"`
-	OutputCostMicro int64           `db:"output_cost_micro" json:"output_cost_micro"`
-	TotalCostMicro  int64           `db:"total_cost_micro" json:"total_cost_micro"`
-	PricingSnapshot json.RawMessage `db:"pricing_snapshot" json:"pricing_snapshot"`
-	CreatedAt       time.Time       `db:"created_at" json:"created_at"`
+	ID               uuid.UUID       `db:"id" json:"id"`
+	UsageRecordID    uuid.UUID       `db:"usage_record_id" json:"usage_record_id"`
+	OrgID            uuid.UUID       `db:"org_id" json:"org_id"`
+	ProviderID       uuid.UUID       `db:"provider_id" json:"provider_id"`
+	ModelID          uuid.UUID       `db:"model_id" json:"model_id"`
+	Currency         string          `db:"currency" json:"currency"`
+	InputCostMicro   int64           `db:"input_cost_micro" json:"input_cost_micro"`
+	OutputCostMicro  int64           `db:"output_cost_micro" json:"output_cost_micro"`
+	TotalCostMicro   int64           `db:"total_cost_micro" json:"total_cost_micro"`
+	PricingVersionID *uuid.UUID      `db:"pricing_version_id" json:"pricing_version_id"`
+	PricingSnapshot  json.RawMessage `db:"pricing_snapshot" json:"pricing_snapshot"`
+	CreatedAt        time.Time       `db:"created_at" json:"created_at"`
 }
 
 func (q *Queries) InsertCostRecord(ctx context.Context, arg InsertCostRecordParams) (CostRecord, error) {
@@ -56,6 +58,7 @@ func (q *Queries) InsertCostRecord(ctx context.Context, arg InsertCostRecordPara
 		arg.InputCostMicro,
 		arg.OutputCostMicro,
 		arg.TotalCostMicro,
+		arg.PricingVersionID,
 		arg.PricingSnapshot,
 		arg.CreatedAt,
 	)
@@ -72,6 +75,7 @@ func (q *Queries) InsertCostRecord(ctx context.Context, arg InsertCostRecordPara
 		&i.TotalCostMicro,
 		&i.PricingSnapshot,
 		&i.CreatedAt,
+		&i.PricingVersionID,
 	)
 	return i, err
 }
