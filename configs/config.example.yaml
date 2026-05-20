@@ -6,3 +6,5 @@ platform_bootstrap_token: change-me-bootstrap-token
 token_hash_secret: change-me-token-hash-secret
 secret_encryption_key: 0123456789abcdef0123456789abcdef
 log_level: info
+max_retries: 1
+retry_backoff_ms: 100
