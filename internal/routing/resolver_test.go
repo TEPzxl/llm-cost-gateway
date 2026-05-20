@@ -42,6 +42,40 @@ func TestResolverResolvesSingleRoutePolicy(t *testing.T) {
 	}
 }
 
+func TestResolverResolveTargetsReturnsFallbackTargetsByPriority(t *testing.T) {
+	ctx := context.Background()
+	st := openRoutingTestStore(t, ctx)
+	resetRoutingTestDatabase(t, ctx, st)
+
+	org := createRoutingTestOrg(t, ctx, st, "resolver-fallback-org")
+	providerA := createRoutingTestProvider(t, ctx, st, org.ID, "mock-provider-a", "active")
+	modelA := createRoutingTestModel(t, ctx, st, org.ID, providerA.ID, "mock-small-a", "active")
+	providerB := createRoutingTestProvider(t, ctx, st, org.ID, "mock-provider-b", "active")
+	modelB := createRoutingTestModel(t, ctx, st, org.ID, providerB.ID, "mock-small-b", "active")
+	createRoutingTestFallbackPolicy(t, ctx, st, org.ID, "fallback-policy", "fallback-chat", []routingTestTarget{
+		{ProviderID: providerB.ID, ModelID: modelB.ID, Priority: 2},
+		{ProviderID: providerA.ID, ModelID: modelA.ID, Priority: 1},
+	})
+
+	resolver := NewResolver(st.Queries)
+	result, err := resolver.ResolveTargets(ctx, ResolveParams{
+		OrgID:          org.ID,
+		RequestedModel: "fallback-chat",
+	})
+	if err != nil {
+		t.Fatalf("ResolveTargets returned error: %v", err)
+	}
+	if result.RoutePolicy.Strategy != StrategyFallback {
+		t.Fatalf("strategy = %q, want fallback", result.RoutePolicy.Strategy)
+	}
+	if len(result.Targets) != 2 {
+		t.Fatalf("targets len = %d, want 2", len(result.Targets))
+	}
+	if result.Targets[0].Provider.ID != providerA.ID || result.Targets[1].Provider.ID != providerB.ID {
+		t.Fatalf("target providers = %s/%s, want %s/%s", result.Targets[0].Provider.ID, result.Targets[1].Provider.ID, providerA.ID, providerB.ID)
+	}
+}
+
 func TestResolverReturnsRouteNotFoundForMissingAlias(t *testing.T) {
 	ctx := context.Background()
 	st := openRoutingTestStore(t, ctx)
@@ -211,6 +245,46 @@ func createRoutingTestPolicy(t *testing.T, ctx context.Context, st *store.Store,
 		CreatedAt:     now,
 	}); err != nil {
 		t.Fatalf("CreateRouteTarget returned error: %v", err)
+	}
+	return policy
+}
+
+type routingTestTarget struct {
+	ProviderID uuid.UUID
+	ModelID    uuid.UUID
+	Priority   int32
+}
+
+func createRoutingTestFallbackPolicy(t *testing.T, ctx context.Context, st *store.Store, orgID uuid.UUID, name string, matchModel string, targets []routingTestTarget) db.RoutePolicy {
+	t.Helper()
+
+	now := time.Now().UTC()
+	policy, err := st.Queries.CreateRoutePolicy(ctx, db.CreateRoutePolicyParams{
+		ID:         uuid.New(),
+		OrgID:      orgID,
+		Name:       name,
+		MatchModel: matchModel,
+		Strategy:   "fallback",
+		Status:     "active",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("CreateRoutePolicy returned error: %v", err)
+	}
+	for _, target := range targets {
+		if _, err := st.Queries.CreateRouteTarget(ctx, db.CreateRouteTargetParams{
+			ID:            uuid.New(),
+			OrgID:         orgID,
+			RoutePolicyID: policy.ID,
+			ProviderID:    target.ProviderID,
+			ModelID:       target.ModelID,
+			Priority:      target.Priority,
+			Weight:        100,
+			CreatedAt:     now,
+		}); err != nil {
+			t.Fatalf("CreateRouteTarget returned error: %v", err)
+		}
 	}
 	return policy
 }

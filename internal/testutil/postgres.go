@@ -44,7 +44,7 @@ func OpenPostgres(t *testing.T, ctx context.Context) *pgxpool.Pool {
 
 	pool := openPoolOrSkip(t, ctx, testDSN)
 	t.Cleanup(pool.Close)
-	applyInitialMigration(t, ctx, pool)
+	applyMigrations(t, ctx, pool)
 	return pool
 }
 
@@ -62,7 +62,7 @@ func openPoolOrSkip(t *testing.T, ctx context.Context, dsn string) *pgxpool.Pool
 	return pool
 }
 
-func applyInitialMigration(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+func applyMigrations(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 
 	_, filename, _, ok := runtime.Caller(0)
@@ -70,13 +70,23 @@ func applyInitialMigration(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 		t.Fatal("resolve migration path: runtime.Caller failed")
 	}
 	root := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", ".."))
-	migrationPath := filepath.Join(root, "db", "migrations", "000001_init.up.sql")
+	migrationsDir := filepath.Join(root, "db", "migrations")
 
-	migration, err := os.ReadFile(migrationPath)
+	entries, err := os.ReadDir(migrationsDir)
 	if err != nil {
-		t.Fatalf("read initial migration: %v", err)
+		t.Fatalf("read migrations dir: %v", err)
 	}
-	if _, err := pool.Exec(ctx, string(migration)); err != nil {
-		t.Fatalf("apply initial migration: %v", err)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".up.sql") {
+			continue
+		}
+		migrationPath := filepath.Join(migrationsDir, entry.Name())
+		migration, err := os.ReadFile(migrationPath)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", entry.Name(), err)
+		}
+		if _, err := pool.Exec(ctx, string(migration)); err != nil {
+			t.Fatalf("apply migration %s: %v", entry.Name(), err)
+		}
 	}
 }

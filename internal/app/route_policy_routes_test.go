@@ -79,6 +79,93 @@ func TestAdminRoutePolicyRoutesCreateAndListPolicy(t *testing.T) {
 	}
 }
 
+func TestAdminRoutePolicyRoutesCreateFallbackPolicyWithMultipleTargets(t *testing.T) {
+	ctx := context.Background()
+	router, st := newTask5TestRouter(t)
+	orgID := createOrgViaHTTP(t, router, "Fallback Route Org", "fallback-route-org")
+	adminToken := createAdminTokenViaHTTP(t, router, orgID)
+	providerA := createProviderViaHTTP(t, router, adminToken.Token, createProviderRequest{
+		Name:      "mock-provider-a",
+		Type:      "mock",
+		TimeoutMS: 30000,
+	})
+	modelA := createModelViaHTTP(t, router, adminToken.Token, createModelRequest{
+		ProviderID:                     providerA.ID,
+		ProviderModelName:              "mock-small-a",
+		DisplayName:                    "Mock Small A",
+		InputPriceMicroUSDPer1KTokens:  100,
+		OutputPriceMicroUSDPer1KTokens: 200,
+	})
+	providerB := createProviderViaHTTP(t, router, adminToken.Token, createProviderRequest{
+		Name:      "mock-provider-b",
+		Type:      "mock",
+		TimeoutMS: 30000,
+	})
+	modelB := createModelViaHTTP(t, router, adminToken.Token, createModelRequest{
+		ProviderID:                     providerB.ID,
+		ProviderModelName:              "mock-small-b",
+		DisplayName:                    "Mock Small B",
+		InputPriceMicroUSDPer1KTokens:  100,
+		OutputPriceMicroUSDPer1KTokens: 200,
+	})
+
+	policy := createRoutePolicyViaHTTP(t, router, adminToken.Token, createRoutePolicyRequest{
+		Name:       "fallback-policy",
+		MatchModel: "fallback-chat",
+		Strategy:   "fallback",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: providerA.ID, ModelID: modelA.ID, Priority: 1, Weight: 100},
+			{ProviderID: providerB.ID, ModelID: modelB.ID, Priority: 2, Weight: 100},
+		},
+	})
+	if policy.Strategy != "fallback" {
+		t.Fatalf("strategy = %q, want fallback", policy.Strategy)
+	}
+
+	targets, err := st.Queries.ListRouteTargets(ctx, db.ListRouteTargetsParams{
+		OrgID:         orgID,
+		RoutePolicyID: policy.ID,
+	})
+	if err != nil {
+		t.Fatalf("ListRouteTargets returned error: %v", err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("created %d route targets, want 2", len(targets))
+	}
+	if targets[0].Priority != 1 || targets[1].Priority != 2 {
+		t.Fatalf("target priorities = %d/%d, want 1/2", targets[0].Priority, targets[1].Priority)
+	}
+}
+
+func TestAdminRoutePolicyRoutesRejectFallbackWithSingleTarget(t *testing.T) {
+	router, _ := newTask5TestRouter(t)
+	orgID := createOrgViaHTTP(t, router, "Fallback Single Org", "fallback-single-org")
+	adminToken := createAdminTokenViaHTTP(t, router, orgID)
+	provider := createProviderViaHTTP(t, router, adminToken.Token, createProviderRequest{
+		Name:      "mock-provider",
+		Type:      "mock",
+		TimeoutMS: 30000,
+	})
+	model := createModelViaHTTP(t, router, adminToken.Token, createModelRequest{
+		ProviderID:                     provider.ID,
+		ProviderModelName:              "mock-small",
+		DisplayName:                    "Mock Small",
+		InputPriceMicroUSDPer1KTokens:  100,
+		OutputPriceMicroUSDPer1KTokens: 200,
+	})
+
+	payload := `{"name":"bad-fallback","match_model":"fallback-chat","strategy":"fallback","targets":[{"provider_id":"` + provider.ID.String() + `","model_id":"` + model.ID.String() + `","priority":1,"weight":100}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/route-policies", strings.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer "+adminToken.Token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/v1/admin/route-policies status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
 func TestAdminRoutePolicyRoutesRejectCrossOrgTarget(t *testing.T) {
 	router, _ := newTask5TestRouter(t)
 	orgA := createOrgViaHTTP(t, router, "Route Owner Org", "route-owner-org")
