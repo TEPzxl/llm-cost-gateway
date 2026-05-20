@@ -99,6 +99,7 @@ type providerAttemptMetadata struct {
 	Result     string    `json:"result"`
 	ErrorCode  string    `json:"error_code,omitempty"`
 	Retryable  bool      `json:"retryable,omitempty"`
+	Attempts   int       `json:"attempts"`
 }
 
 func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observability.Metrics, retryPolicy RetryPolicy) *ChatService {
@@ -172,7 +173,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 			lastErr = err
 			lastStatus = http.StatusServiceUnavailable
 			lastCode = domain.CodeProviderUnavailable
-			attempts = appendProviderAttempt(attempts, target, "error", lastCode, true)
+			attempts = appendProviderAttempt(attempts, target, "error", lastCode, true, 1)
 			if shouldTryNextFallbackTarget(includeFallbackMetadata, true, index, len(resolved.Targets)) {
 				s.metrics.ObserveProviderRequest(target.Provider.Name, request.Model, "error", lastCode)
 				continue
@@ -184,7 +185,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 			lastErr = err
 			lastStatus = http.StatusServiceUnavailable
 			lastCode = domain.CodeProviderUnavailable
-			attempts = appendProviderAttempt(attempts, target, "error", lastCode, true)
+			attempts = appendProviderAttempt(attempts, target, "error", lastCode, true, 1)
 			if shouldTryNextFallbackTarget(includeFallbackMetadata, true, index, len(resolved.Targets)) {
 				s.metrics.ObserveProviderRequest(target.Provider.Name, request.Model, "error", lastCode)
 				continue
@@ -193,7 +194,8 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 		}
 
 		providerStarted = s.clock()
-		providerResponse, err = adapter.Chat(ctx, contract.ChatRequest{
+		var attemptCount int
+		providerResponse, attemptCount, err = s.chatProviderWithRetry(ctx, adapter, contract.ChatRequest{
 			RequestID:   input.RequestID.String(),
 			OrgID:       input.Principal.OrgID,
 			Provider:    providerConfig,
@@ -204,13 +206,13 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 			Stream:      false,
 		})
 		if err == nil {
-			attempts = appendProviderAttempt(attempts, target, "success", "", false)
+			attempts = appendProviderAttempt(attempts, target, "success", "", false, attemptCount)
 			break
 		}
 		lastErr = err
 		lastStatus, lastCode = providerErrorStatus(err)
 		retryable := fallbackRetryable(err)
-		attempts = appendProviderAttempt(attempts, target, "error", lastCode, retryable)
+		attempts = appendProviderAttempt(attempts, target, "error", lastCode, retryable, attemptCount)
 		s.metrics.ObserveProviderRequest(target.Provider.Name, request.Model, "error", lastCode)
 		if shouldTryNextFallbackTarget(includeFallbackMetadata, retryable, index, len(resolved.Targets)) {
 			continue
@@ -227,7 +229,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 			lastStatus = http.StatusServiceUnavailable
 			lastCode = domain.CodeProviderUnavailable
 		}
-		metadata := chatMetadata(budgetCheck, attempts, includeFallbackMetadata)
+		metadata := chatMetadata(budgetCheck, attempts, includeFallbackMetadata, includeFallbackMetadata || hasRetriedTarget(attempts))
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, lastStatus, lastCode, "", &selected.Provider.ID, &selected.Model.ID, metadata, startedAt)
 		s.metrics.ObserveGatewayRequest("error", selected.Provider.Name, request.Model, s.clock().Sub(startedAt))
 		return ChatResult{}, domain.NewError(lastStatus, lastCode, "provider request failed")
@@ -238,7 +240,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	if providerLatencyMS == 0 {
 		providerLatencyMS = int32(s.clock().Sub(providerStarted).Milliseconds())
 	}
-	metadata := chatMetadata(budgetCheck, attempts, includeFallbackMetadata)
+	metadata := chatMetadata(budgetCheck, attempts, includeFallbackMetadata, includeFallbackMetadata || hasRetriedTarget(attempts))
 	successStatus := metering.StatusSuccess
 	if budgetCheck.Warning {
 		successStatus = metering.StatusBudgetWarned
@@ -373,6 +375,33 @@ func (s *ChatService) providerConfig(ctx context.Context, item db.Provider) (con
 	return cfg, nil
 }
 
+func (s *ChatService) chatProviderWithRetry(ctx context.Context, adapter contract.Adapter, request contract.ChatRequest) (*contract.ChatResponse, int, error) {
+	policy := s.retryPolicy.Normalize()
+	maxAttempts := policy.MaxRetries + 1
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		response, err := adapter.Chat(ctx, request)
+		if err == nil {
+			return response, attempt, nil
+		}
+		lastErr = err
+		if attempt == maxAttempts || !s.retryPolicy.ShouldRetry(err) {
+			return nil, attempt, err
+		}
+		timer := time.NewTimer(policy.Backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, attempt, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil, maxAttempts, lastErr
+}
+
 func providerErrorStatus(err error) (int, string) {
 	switch contract.ErrorCode(err) {
 	case domain.CodeProviderTimeout:
@@ -386,7 +415,10 @@ func providerErrorStatus(err error) (int, string) {
 	}
 }
 
-func appendProviderAttempt(attempts []providerAttemptMetadata, target routing.ResolvedTarget, result string, errorCode string, retryable bool) []providerAttemptMetadata {
+func appendProviderAttempt(attempts []providerAttemptMetadata, target routing.ResolvedTarget, result string, errorCode string, retryable bool, attemptCount int) []providerAttemptMetadata {
+	if attemptCount < 1 {
+		attemptCount = 1
+	}
 	return append(attempts, providerAttemptMetadata{
 		ProviderID: target.Provider.ID,
 		ModelID:    target.Model.ID,
@@ -394,6 +426,7 @@ func appendProviderAttempt(attempts []providerAttemptMetadata, target routing.Re
 		Result:     result,
 		ErrorCode:  errorCode,
 		Retryable:  retryable,
+		Attempts:   attemptCount,
 	})
 }
 
@@ -416,7 +449,16 @@ func fallbackRetryable(err error) bool {
 	}
 }
 
-func chatMetadata(result budget.CheckResult, attempts []providerAttemptMetadata, includeFallback bool) *json.RawMessage {
+func hasRetriedTarget(attempts []providerAttemptMetadata) bool {
+	for _, attempt := range attempts {
+		if attempt.Attempts > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func chatMetadata(result budget.CheckResult, attempts []providerAttemptMetadata, includeFallback bool, includeAttempts bool) *json.RawMessage {
 	body := map[string]any{}
 	if budgetBody := budgetMetadataBody(result); budgetBody != nil {
 		body["budget"] = budgetBody
@@ -427,6 +469,8 @@ func chatMetadata(result budget.CheckResult, attempts []providerAttemptMetadata,
 			fallbackCount = 0
 		}
 		body["fallback_count"] = fallbackCount
+	}
+	if includeAttempts {
 		body["attempted_targets"] = attempts
 	}
 	if len(body) == 0 {

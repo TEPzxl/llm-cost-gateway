@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -279,6 +281,125 @@ func TestGatewayChatCompletionsFallbackAllTargetsFail(t *testing.T) {
 	assertAppRequestLogFallbackCount(t, ctx, st, 1)
 }
 
+func TestGatewayChatCompletionsRetriesRetryableProviderError(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"message":"temporary failure"}}`))
+			return
+		}
+		writeAppOpenAIChatResponse(t, w)
+	}))
+	defer server.Close()
+
+	provider, model := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "retry-success", server.URL, 100)
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "retry-success-policy",
+		MatchModel: "retry-success",
+		Strategy:   "single",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: provider.ID, ModelID: model.ID, Priority: 1, Weight: 100},
+		},
+	})
+
+	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"retry-success","messages":[{"role":"user","content":"hello"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("retry chat status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("provider calls = %d, want 2", got)
+	}
+	assertAppTableCount(t, ctx, st, "request_logs", 1)
+	assertAppTableCount(t, ctx, st, "usage_records", 1)
+	assertAppTableCount(t, ctx, st, "cost_records", 1)
+	assertAppRequestLogProvider(t, ctx, st, provider.ID)
+	assertAppRequestLogTargetAttempts(t, ctx, st, 2)
+}
+
+func TestGatewayChatCompletionsDoesNotRetryNonRetryableProviderError(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"bad key"}}`))
+	}))
+	defer server.Close()
+
+	provider, model := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "retry-unauthorized", server.URL, 100)
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "retry-unauthorized-policy",
+		MatchModel: "retry-unauthorized",
+		Strategy:   "single",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: provider.ID, ModelID: model.ID, Priority: 1, Weight: 100},
+		},
+	})
+
+	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"retry-unauthorized","messages":[{"role":"user","content":"hello"}]}`)
+	assertGatewayError(t, rec, http.StatusBadGateway, "provider_error")
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("provider calls = %d, want 1", got)
+	}
+	assertAppTableCount(t, ctx, st, "request_logs", 1)
+	assertAppTableCount(t, ctx, st, "usage_records", 0)
+	assertAppTableCount(t, ctx, st, "cost_records", 0)
+	assertAppRequestLogProvider(t, ctx, st, provider.ID)
+}
+
+func TestGatewayChatCompletionsRetriesProviderTimeout(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		time.Sleep(40 * time.Millisecond)
+		writeAppOpenAIChatResponse(t, w)
+	}))
+	defer server.Close()
+
+	provider := createProviderViaHTTP(t, router, apiKey.AdminToken, createProviderRequest{
+		Name:      "retry-timeout-provider",
+		Type:      "openai_compatible",
+		BaseURL:   stringPtr(server.URL + "/v1"),
+		APIKey:    stringPtr("provider-secret-key"),
+		TimeoutMS: 5,
+	})
+	model := createModelViaHTTP(t, router, apiKey.AdminToken, createModelRequest{
+		ProviderID:                     provider.ID,
+		ProviderModelName:              "retry-timeout-model",
+		DisplayName:                    "Retry Timeout Model",
+		InputPriceMicroUSDPer1KTokens:  100,
+		OutputPriceMicroUSDPer1KTokens: 100,
+	})
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "retry-timeout-policy",
+		MatchModel: "retry-timeout",
+		Strategy:   "single",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: provider.ID, ModelID: model.ID, Priority: 1, Weight: 100},
+		},
+	})
+
+	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"retry-timeout","messages":[{"role":"user","content":"hello"}]}`)
+	assertGatewayError(t, rec, http.StatusGatewayTimeout, "provider_timeout")
+
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("provider calls = %d, want 2", got)
+	}
+	assertAppTableCount(t, ctx, st, "request_logs", 1)
+	assertAppTableCount(t, ctx, st, "usage_records", 0)
+	assertAppTableCount(t, ctx, st, "cost_records", 0)
+	assertAppRequestLogProvider(t, ctx, st, provider.ID)
+	assertAppRequestLogTargetAttempts(t, ctx, st, 2)
+}
+
 func TestGatewayChatCompletionsRouteNotFound(t *testing.T) {
 	router, _, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
 
@@ -365,6 +486,8 @@ func newGatewayChatTestRouterWithMetrics(t *testing.T, limiter fakeGatewayLimite
 		PlatformBootstrapToken: "bootstrap-token",
 		TokenHashSecret:        "token-hash-secret",
 		SecretEncryptionKey:    "0123456789abcdef0123456789abcdef",
+		MaxRetries:             1,
+		RetryBackoffMS:         1,
 		Store:                  st,
 		RateLimiter:            limiter,
 		Metrics:                metrics,
@@ -498,6 +621,18 @@ func assertAppRequestLogFallbackCount(t *testing.T, ctx context.Context, st *sto
 	}
 }
 
+func assertAppRequestLogTargetAttempts(t *testing.T, ctx context.Context, st *store.Store, want int) {
+	t.Helper()
+
+	var got int
+	if err := st.Pool.QueryRow(ctx, `SELECT COALESCE((metadata->'attempted_targets'->0->>'attempts')::int, 0) FROM request_logs ORDER BY started_at DESC LIMIT 1`).Scan(&got); err != nil {
+		t.Fatalf("select latest request log target attempts: %v", err)
+	}
+	if got != want {
+		t.Fatalf("target attempts = %d, want %d", got, want)
+	}
+}
+
 func createOpenAICompatibleRouteTarget(t *testing.T, router http.Handler, adminToken string, name string, baseURL string, price int64) (providerResponse, modelResponse) {
 	t.Helper()
 
@@ -516,6 +651,15 @@ func createOpenAICompatibleRouteTarget(t *testing.T, router http.Handler, adminT
 		OutputPriceMicroUSDPer1KTokens: price,
 	})
 	return provider, model
+}
+
+func writeAppOpenAIChatResponse(t *testing.T, w http.ResponseWriter) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	_, err := w.Write([]byte(`{"id":"chatcmpl_test","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`))
+	if err != nil {
+		t.Fatalf("write chat response: %v", err)
+	}
 }
 
 func writeAppSSE(t *testing.T, w http.ResponseWriter, data string) {
