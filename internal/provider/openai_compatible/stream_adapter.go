@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -55,11 +54,7 @@ func (a *Adapter) StreamChat(ctx context.Context, req contract.ChatRequest) (con
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		_ = httpResp.Body.Close()
 		cancel()
-		code := domain.CodeProviderError
-		if httpResp.StatusCode >= 500 {
-			code = domain.CodeProviderUnavailable
-		}
-		return nil, contract.NewError(code, fmt.Sprintf("provider returned status %d", httpResp.StatusCode), nil)
+		return nil, upstreamStatusError(httpResp.StatusCode)
 	}
 
 	stream := &openAIStream{

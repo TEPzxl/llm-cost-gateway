@@ -81,11 +81,7 @@ func (a *Adapter) Chat(ctx context.Context, req contract.ChatRequest) (*contract
 	defer httpResp.Body.Close()
 
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		code := domain.CodeProviderError
-		if httpResp.StatusCode >= 500 {
-			code = domain.CodeProviderUnavailable
-		}
-		return nil, contract.NewError(code, fmt.Sprintf("provider returned status %d", httpResp.StatusCode), nil)
+		return nil, upstreamStatusError(httpResp.StatusCode)
 	}
 
 	var upstream upstreamResponse
@@ -165,6 +161,20 @@ func newUpstreamRequest(req contract.ChatRequest) upstreamRequest {
 
 func upstreamChatCompletionsURL(baseURL string) string {
 	return strings.TrimRight(baseURL, "/") + "/chat/completions"
+}
+
+func upstreamStatusError(statusCode int) error {
+	code := domain.CodeProviderError
+	if statusCode >= 500 {
+		code = domain.CodeProviderUnavailable
+	}
+	return contract.NewStatusError(
+		code,
+		fmt.Sprintf("provider returned status %d", statusCode),
+		statusCode,
+		statusCode == http.StatusTooManyRequests || statusCode >= 500,
+		nil,
+	)
 }
 
 func isTimeoutError(ctx context.Context, err error) bool {

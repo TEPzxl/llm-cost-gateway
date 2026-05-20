@@ -102,10 +102,12 @@ func TestAdapterStandardizesUpstreamStatusErrors(t *testing.T) {
 		name       string
 		statusCode int
 		wantCode   string
+		retryable  bool
 	}{
-		{name: "401", statusCode: http.StatusUnauthorized, wantCode: domain.CodeProviderError},
-		{name: "429", statusCode: http.StatusTooManyRequests, wantCode: domain.CodeProviderError},
-		{name: "500", statusCode: http.StatusInternalServerError, wantCode: domain.CodeProviderUnavailable},
+		{name: "401", statusCode: http.StatusUnauthorized, wantCode: domain.CodeProviderError, retryable: false},
+		{name: "403", statusCode: http.StatusForbidden, wantCode: domain.CodeProviderError, retryable: false},
+		{name: "429", statusCode: http.StatusTooManyRequests, wantCode: domain.CodeProviderError, retryable: true},
+		{name: "500", statusCode: http.StatusInternalServerError, wantCode: domain.CodeProviderUnavailable, retryable: true},
 	}
 
 	for _, tt := range tests {
@@ -120,6 +122,12 @@ func TestAdapterStandardizesUpstreamStatusErrors(t *testing.T) {
 			_, err := adapter.Chat(context.Background(), validChatRequest(server.URL))
 			if contract.ErrorCode(err) != tt.wantCode {
 				t.Fatalf("Chat error code = %q, want %q", contract.ErrorCode(err), tt.wantCode)
+			}
+			if contract.Retryable(err) != tt.retryable {
+				t.Fatalf("Retryable = %v, want %v", contract.Retryable(err), tt.retryable)
+			}
+			if contract.StatusCode(err) != tt.statusCode {
+				t.Fatalf("StatusCode = %d, want %d", contract.StatusCode(err), tt.statusCode)
 			}
 		})
 	}
@@ -156,6 +164,9 @@ func TestAdapterReturnsUsageMissing(t *testing.T) {
 	_, err := adapter.Chat(context.Background(), validChatRequest(server.URL))
 	if contract.ErrorCode(err) != domain.CodeUsageMissing {
 		t.Fatalf("Chat error code = %q, want %q", contract.ErrorCode(err), domain.CodeUsageMissing)
+	}
+	if contract.Retryable(err) {
+		t.Fatal("usage missing retryable = true, want false")
 	}
 }
 

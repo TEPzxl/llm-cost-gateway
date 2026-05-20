@@ -80,9 +80,11 @@ type Adapter interface {
 }
 
 type Error struct {
-	Code    string
-	Message string
-	Cause   error
+	Code       string
+	Message    string
+	Cause      error
+	StatusCode int
+	Retryable  bool
 }
 
 func NewError(code string, message string, cause error) *Error {
@@ -90,6 +92,16 @@ func NewError(code string, message string, cause error) *Error {
 		Code:    code,
 		Message: message,
 		Cause:   cause,
+	}
+}
+
+func NewStatusError(code string, message string, statusCode int, retryable bool, cause error) *Error {
+	return &Error{
+		Code:       code,
+		Message:    message,
+		Cause:      cause,
+		StatusCode: statusCode,
+		Retryable:  retryable,
 	}
 }
 
@@ -110,4 +122,20 @@ func ErrorCode(err error) string {
 		return providerErr.Code
 	}
 	return ""
+}
+
+func StatusCode(err error) int {
+	var providerErr *Error
+	if errors.As(err, &providerErr) {
+		return providerErr.StatusCode
+	}
+	return 0
+}
+
+func Retryable(err error) bool {
+	var providerErr *Error
+	if errors.As(err, &providerErr) {
+		return providerErr.Retryable
+	}
+	return false
 }
