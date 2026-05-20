@@ -8,6 +8,7 @@ export type ConsolePage =
   | "route-policies"
   | "budgets"
   | "budget-alerts"
+  | "audit-logs"
   | "request-logs"
   | "usage-summary";
 
@@ -26,6 +27,7 @@ const navItems: Array<{ id: ConsolePage; label: string }> = [
   { id: "route-policies", label: "Route Policies" },
   { id: "budgets", label: "Budgets" },
   { id: "budget-alerts", label: "Budget Alerts" },
+  { id: "audit-logs", label: "Audit Logs" },
   { id: "request-logs", label: "Request Logs" },
   { id: "usage-summary", label: "Usage Summary" }
 ];

@@ -1,6 +1,7 @@
 import type {
   APIKey,
   APIKeyCreateResponse,
+  AdminAuditLog,
   Budget,
   BudgetAlert,
   BudgetAlertDelivery,
@@ -118,6 +119,8 @@ export function createApiClient(options: ApiClientOptions) {
       request<ListResponse<BudgetAlertDelivery>>(
         "/api/v1/admin/budget-alert-deliveries"
       ),
+    listAuditLogs: () =>
+      request<ListResponse<AdminAuditLog>>("/api/v1/admin/audit-logs"),
     listRequestLogs: (query = "") =>
       request<RequestLogsResponse>(`/api/v1/admin/request-logs${query}`),
     usageSummary: (query = "") =>

@@ -2,6 +2,10 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -74,6 +78,54 @@ func TestAdminAuditLogsCreatedForProviderAndBudget(t *testing.T) {
 	}
 	if leaked != 0 {
 		t.Fatalf("found %d audit log rows containing raw admin token", leaked)
+	}
+}
+
+func TestAdminAuditLogsRouteListsAuditLogs(t *testing.T) {
+	router, _ := newTask5TestRouter(t)
+	orgID := createOrgViaHTTP(t, router, "Audit List Org", "audit-list-org")
+	adminToken := createAdminTokenViaHTTP(t, router, orgID)
+	provider := createProviderViaHTTP(t, router, adminToken.Token, createProviderRequest{
+		Name:      "audit-list-provider",
+		Type:      "mock",
+		TimeoutMS: 30000,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/audit-logs", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken.Token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/admin/audit-logs status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var response struct {
+		Items []struct {
+			ActorAdminTokenID uuid.UUID  `json:"actor_admin_token_id"`
+			Action            string     `json:"action"`
+			ResourceType      string     `json:"resource_type"`
+			ResourceID        *uuid.UUID `json:"resource_id"`
+			RequestID         string     `json:"request_id"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode audit logs response: %v", err)
+	}
+	if len(response.Items) != 1 {
+		t.Fatalf("audit log count = %d, want 1", len(response.Items))
+	}
+	item := response.Items[0]
+	if item.ActorAdminTokenID != adminToken.ID || item.Action != "create_provider" || item.ResourceType != "provider" {
+		t.Fatalf("audit log item = %+v, want create_provider by %s", item, adminToken.ID)
+	}
+	if item.ResourceID == nil || *item.ResourceID != provider.ID {
+		t.Fatalf("audit log resource_id = %v, want %s", item.ResourceID, provider.ID)
+	}
+	if item.RequestID == "" {
+		t.Fatal("audit log request_id is empty")
+	}
+	if strings.Contains(rec.Body.String(), adminToken.Token) {
+		t.Fatal("audit log response contains raw token")
 	}
 }
 

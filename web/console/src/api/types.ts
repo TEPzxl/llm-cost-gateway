@@ -159,6 +159,16 @@ export type BudgetAlertDelivery = {
   created_at: string;
 };
 
+export type AdminAuditLog = {
+  id: ID;
+  actor_admin_token_id: ID;
+  action: string;
+  resource_type: string;
+  resource_id?: ID | null;
+  request_id: string;
+  created_at: string;
+};
+
 export type RequestLog = {
   id: ID;
   api_key_id?: ID | null;
