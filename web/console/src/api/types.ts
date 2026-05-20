@@ -70,7 +70,7 @@ export type RoutePolicy = {
   id: ID;
   name: string;
   match_model: string;
-  strategy: "single" | string;
+  strategy: "single" | "fallback" | string;
   status: string;
   created_at: string;
 };
@@ -78,7 +78,7 @@ export type RoutePolicy = {
 export type CreateRoutePolicyRequest = {
   name: string;
   match_model: string;
-  strategy: "single";
+  strategy: "single" | "fallback";
   targets: Array<{
     provider_id: ID;
     model_id: ID;

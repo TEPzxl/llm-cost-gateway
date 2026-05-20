@@ -250,6 +250,58 @@ th {
   margin-top: 14px;
 }
 
+.target-list {
+  display: grid;
+  gap: 10px;
+}
+
+.target-row {
+  display: grid;
+  grid-template-columns: 32px minmax(160px, 1fr) minmax(160px, 1fr) 96px auto;
+  gap: 10px;
+  align-items: end;
+  border: 1px solid #dce4ef;
+  border-radius: 8px;
+  background: #f7f9fc;
+  padding: 10px;
+}
+
+.target-index {
+  display: grid;
+  width: 32px;
+  height: 36px;
+  place-items: center;
+  border-radius: 6px;
+  background: #e8f4ff;
+  color: #165d91;
+  font-weight: 800;
+}
+
+.target-field {
+  display: grid;
+  gap: 6px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.target-weight {
+  min-width: 88px;
+}
+
+.target-remove {
+  min-height: 36px;
+}
+
+.target-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.target-actions {
+  margin-top: 10px;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -362,7 +414,8 @@ th {
 
   .form-grid,
   .metric-grid,
-  .dashboard-grid {
+  .dashboard-grid,
+  .target-row {
     grid-template-columns: 1fr;
   }
 
