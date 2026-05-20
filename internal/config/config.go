@@ -21,6 +21,8 @@ type Config struct {
 	TokenHashSecret        string `yaml:"token_hash_secret"`
 	SecretEncryptionKey    string `yaml:"secret_encryption_key"`
 	LogLevel               string `yaml:"log_level"`
+	MaxRetries             int    `yaml:"max_retries"`
+	RetryBackoffMS         int    `yaml:"retry_backoff_ms"`
 }
 
 func Load(path string) (Config, error) {
@@ -73,16 +75,24 @@ func (c Config) Validate() error {
 	if !validLogLevel(c.LogLevel) {
 		return fmt.Errorf("LOG_LEVEL must be one of debug, info, warn, error, dpanic, panic, fatal")
 	}
+	if c.MaxRetries < 0 {
+		return fmt.Errorf("MAX_RETRIES must be greater than or equal to 0")
+	}
+	if c.RetryBackoffMS <= 0 {
+		return fmt.Errorf("RETRY_BACKOFF_MS must be greater than 0")
+	}
 	return nil
 }
 
 func defaultConfig() Config {
 	return Config{
-		AppEnv:      "development",
-		ServerPort:  8080,
-		DatabaseURL: "postgres://llmgw:llmgw@localhost:5432/llmgw?sslmode=disable",
-		RedisURL:    "redis://localhost:6379/0",
-		LogLevel:    "info",
+		AppEnv:         "development",
+		ServerPort:     8080,
+		DatabaseURL:    "postgres://llmgw:llmgw@localhost:5432/llmgw?sslmode=disable",
+		RedisURL:       "redis://localhost:6379/0",
+		LogLevel:       "info",
+		MaxRetries:     1,
+		RetryBackoffMS: 100,
 	}
 }
 
@@ -112,6 +122,20 @@ func applyEnv(cfg *Config) error {
 			return fmt.Errorf("parse SERVER_PORT: %w", err)
 		}
 		cfg.ServerPort = port
+	}
+	if value := os.Getenv("MAX_RETRIES"); value != "" {
+		maxRetries, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("parse MAX_RETRIES: %w", err)
+		}
+		cfg.MaxRetries = maxRetries
+	}
+	if value := os.Getenv("RETRY_BACKOFF_MS"); value != "" {
+		retryBackoffMS, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("parse RETRY_BACKOFF_MS: %w", err)
+		}
+		cfg.RetryBackoffMS = retryBackoffMS
 	}
 	return nil
 }

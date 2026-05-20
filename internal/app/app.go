@@ -49,6 +49,8 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 		PlatformBootstrapToken: cfg.PlatformBootstrapToken,
 		TokenHashSecret:        cfg.TokenHashSecret,
 		SecretEncryptionKey:    cfg.SecretEncryptionKey,
+		MaxRetries:             cfg.MaxRetries,
+		RetryBackoffMS:         cfg.RetryBackoffMS,
 		Store:                  st,
 		RateLimiter:            limiter,
 		Metrics:                observability.NewMetrics(),

@@ -32,6 +32,7 @@ type ChatService struct {
 	budgets             *budget.Service
 	metering            *metering.Service
 	metrics             *observability.Metrics
+	retryPolicy         RetryPolicy
 	secretEncryptionKey string
 	clock               func() time.Time
 }
@@ -100,7 +101,7 @@ type providerAttemptMetadata struct {
 	Retryable  bool      `json:"retryable,omitempty"`
 }
 
-func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observability.Metrics) *ChatService {
+func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observability.Metrics, retryPolicy RetryPolicy) *ChatService {
 	return &ChatService{
 		store:               st,
 		resolver:            routing.NewResolver(st.Queries),
@@ -108,6 +109,7 @@ func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observ
 		budgets:             budget.NewService(st.Queries),
 		metering:            metering.NewService(st, costing.NewCalculator()),
 		metrics:             metrics,
+		retryPolicy:         retryPolicy.Normalize(),
 		secretEncryptionKey: secretEncryptionKey,
 		clock:               func() time.Time { return time.Now().UTC() },
 	}

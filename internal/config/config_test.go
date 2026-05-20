@@ -32,10 +32,18 @@ func TestLoadUsesDefaultsAndEnvironment(t *testing.T) {
 	if cfg.LogLevel != "info" {
 		t.Fatalf("LogLevel = %q, want info", cfg.LogLevel)
 	}
+	if cfg.MaxRetries != 1 {
+		t.Fatalf("MaxRetries = %d, want 1", cfg.MaxRetries)
+	}
+	if cfg.RetryBackoffMS != 100 {
+		t.Fatalf("RetryBackoffMS = %d, want 100", cfg.RetryBackoffMS)
+	}
 }
 
 func TestLoadReadsConfigFileAndEnvironmentOverrides(t *testing.T) {
 	t.Setenv("SERVER_PORT", "9091")
+	t.Setenv("MAX_RETRIES", "3")
+	t.Setenv("RETRY_BACKOFF_MS", "250")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	content := []byte(`
@@ -47,6 +55,8 @@ platform_bootstrap_token: file-bootstrap
 token_hash_secret: file-hash-secret
 secret_encryption_key: 0123456789abcdef0123456789abcdef
 log_level: debug
+max_retries: 2
+retry_backoff_ms: 125
 `)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
@@ -68,6 +78,12 @@ log_level: debug
 	}
 	if cfg.LogLevel != "debug" {
 		t.Fatalf("LogLevel = %q, want debug", cfg.LogLevel)
+	}
+	if cfg.MaxRetries != 3 {
+		t.Fatalf("MaxRetries = %d, want environment override 3", cfg.MaxRetries)
+	}
+	if cfg.RetryBackoffMS != 250 {
+		t.Fatalf("RetryBackoffMS = %d, want environment override 250", cfg.RetryBackoffMS)
 	}
 }
 
@@ -132,6 +148,30 @@ func TestLoadRejectsInvalidBoundaryValues(t *testing.T) {
 			name: "server port is too high",
 			env: map[string]string{
 				"SERVER_PORT": "70000",
+			},
+		},
+		{
+			name: "max retries is not a number",
+			env: map[string]string{
+				"MAX_RETRIES": "many",
+			},
+		},
+		{
+			name: "max retries is negative",
+			env: map[string]string{
+				"MAX_RETRIES": "-1",
+			},
+		},
+		{
+			name: "retry backoff is not a number",
+			env: map[string]string{
+				"RETRY_BACKOFF_MS": "slow",
+			},
+		},
+		{
+			name: "retry backoff is zero",
+			env: map[string]string{
+				"RETRY_BACKOFF_MS": "0",
 			},
 		},
 	}

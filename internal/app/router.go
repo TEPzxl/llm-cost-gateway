@@ -24,6 +24,8 @@ type RouterConfig struct {
 	PlatformBootstrapToken string
 	TokenHashSecret        string
 	SecretEncryptionKey    string
+	MaxRetries             int
+	RetryBackoffMS         int
 	Store                  *store.Store
 	RateLimiter            middleware.RateLimiter
 	Metrics                *observability.Metrics
@@ -59,7 +61,12 @@ func NewRouter(cfg RouterConfig, logger *zap.Logger) *gin.Engine {
 func registerGatewayRoutes(router *gin.Engine, cfg RouterConfig) {
 	apiKeyService := auth.NewAPIKeyService(cfg.Store.Queries, cfg.TokenHashSecret)
 	meteringService := metering.NewService(cfg.Store, costing.NewCalculator())
-	chatService := gatewayservice.NewChatService(cfg.Store, cfg.SecretEncryptionKey, cfg.Metrics)
+	chatService := gatewayservice.NewChatService(
+		cfg.Store,
+		cfg.SecretEncryptionKey,
+		cfg.Metrics,
+		gatewayservice.NewRetryPolicy(cfg.MaxRetries, cfg.RetryBackoffMS),
+	)
 	chatHandler := gatewayhandler.NewChatCompletionsHandler(chatService)
 
 	group := router.Group("/v1")
