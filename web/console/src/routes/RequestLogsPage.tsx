@@ -7,11 +7,14 @@ import { formatDate, formValue, preventDefault, type PageProps } from "./pageUti
 
 export function RequestLogsPage({ client }: PageProps) {
   const [items, setItems] = useState<RequestLog[]>([]);
+  const [currentQuery, setCurrentQuery] = useState("");
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   async function load(query = "") {
     const response = await client.listRequestLogs(query);
     setItems(response.items);
+    setNextCursor(response.next_cursor);
   }
 
   useEffect(() => {
@@ -21,14 +24,26 @@ export function RequestLogsPage({ client }: PageProps) {
   async function handleFilter(event: React.FormEvent<HTMLFormElement>) {
     const form = preventDefault(event);
     const params = new URLSearchParams();
-    for (const name of ["from", "to", "status", "api_key_id", "provider_id", "model_id", "limit"]) {
+    for (const name of ["from", "to", "status", "error_code", "request_model", "api_key_id", "provider_id", "model_id", "limit"]) {
       const value = formValue(form, name);
       if (value) {
         params.set(name, value);
       }
     }
+    const query = params.toString();
+    setCurrentQuery(query);
     setError("");
-    await load(params.size ? `?${params.toString()}` : "");
+    await load(query ? `?${query}` : "");
+  }
+
+  async function loadNextPage() {
+    if (!nextCursor) {
+      return;
+    }
+    const params = new URLSearchParams(currentQuery);
+    params.set("cursor", nextCursor);
+    setError("");
+    await load(`?${params.toString()}`);
   }
 
   return (
@@ -59,6 +74,8 @@ export function RequestLogsPage({ client }: PageProps) {
             <span>Limit</span>
             <input className="input" name="limit" type="number" defaultValue={50} min={1} max={200} />
           </label>
+          <label className="field"><span>Error Code</span><input className="input" name="error_code" /></label>
+          <label className="field"><span>Request Model</span><input className="input" name="request_model" /></label>
           <label className="field"><span>API Key ID</span><input className="input" name="api_key_id" /></label>
           <label className="field"><span>Provider ID</span><input className="input" name="provider_id" /></label>
           <label className="field"><span>Model ID</span><input className="input" name="model_id" /></label>
@@ -82,6 +99,11 @@ export function RequestLogsPage({ client }: PageProps) {
             { key: "started", header: "Started", render: (item) => formatDate(item.started_at) }
           ]}
         />
+        <div className="form-actions">
+          <button className="button-secondary" type="button" disabled={!nextCursor} onClick={loadNextPage}>
+            Next page
+          </button>
+        </div>
       </section>
     </div>
   );
