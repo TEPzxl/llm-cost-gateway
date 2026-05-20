@@ -93,15 +93,19 @@ type Organization struct {
 }
 
 type Provider struct {
-	ID        uuid.UUID   `db:"id" json:"id"`
-	OrgID     uuid.UUID   `db:"org_id" json:"org_id"`
-	Name      string      `db:"name" json:"name"`
-	Type      string      `db:"type" json:"type"`
-	BaseUrl   pgtype.Text `db:"base_url" json:"base_url"`
-	TimeoutMs int32       `db:"timeout_ms" json:"timeout_ms"`
-	Status    string      `db:"status" json:"status"`
-	CreatedAt time.Time   `db:"created_at" json:"created_at"`
-	UpdatedAt time.Time   `db:"updated_at" json:"updated_at"`
+	ID                  uuid.UUID   `db:"id" json:"id"`
+	OrgID               uuid.UUID   `db:"org_id" json:"org_id"`
+	Name                string      `db:"name" json:"name"`
+	Type                string      `db:"type" json:"type"`
+	BaseUrl             pgtype.Text `db:"base_url" json:"base_url"`
+	TimeoutMs           int32       `db:"timeout_ms" json:"timeout_ms"`
+	Status              string      `db:"status" json:"status"`
+	CreatedAt           time.Time   `db:"created_at" json:"created_at"`
+	UpdatedAt           time.Time   `db:"updated_at" json:"updated_at"`
+	LastHealthStatus    pgtype.Text `db:"last_health_status" json:"last_health_status"`
+	LastHealthCheckedAt *time.Time  `db:"last_health_checked_at" json:"last_health_checked_at"`
+	LastErrorCode       pgtype.Text `db:"last_error_code" json:"last_error_code"`
+	LastErrorMessage    pgtype.Text `db:"last_error_message" json:"last_error_message"`
 }
 
 type ProviderSecret struct {

@@ -23,3 +23,14 @@ SELECT *
 FROM providers
 WHERE org_id = $1
 ORDER BY created_at DESC, id DESC;
+
+-- name: UpdateProviderHealth :one
+UPDATE providers
+SET
+  last_health_status = $3,
+  last_health_checked_at = $4,
+  last_error_code = $5,
+  last_error_message = $6,
+  updated_at = $7
+WHERE org_id = $1 AND id = $2
+RETURNING *;

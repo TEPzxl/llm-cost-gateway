@@ -26,7 +26,7 @@ INSERT INTO providers (
   updated_at
 ) VALUES (
   $1, $2, $3, $4, $5, $6, $7, $8, $9
-) RETURNING id, org_id, name, type, base_url, timeout_ms, status, created_at, updated_at
+) RETURNING id, org_id, name, type, base_url, timeout_ms, status, created_at, updated_at, last_health_status, last_health_checked_at, last_error_code, last_error_message
 `
 
 type CreateProviderParams struct {
@@ -64,12 +64,16 @@ func (q *Queries) CreateProvider(ctx context.Context, arg CreateProviderParams) 
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LastHealthStatus,
+		&i.LastHealthCheckedAt,
+		&i.LastErrorCode,
+		&i.LastErrorMessage,
 	)
 	return i, err
 }
 
 const getProvider = `-- name: GetProvider :one
-SELECT id, org_id, name, type, base_url, timeout_ms, status, created_at, updated_at
+SELECT id, org_id, name, type, base_url, timeout_ms, status, created_at, updated_at, last_health_status, last_health_checked_at, last_error_code, last_error_message
 FROM providers
 WHERE org_id = $1 AND id = $2
 `
@@ -92,12 +96,16 @@ func (q *Queries) GetProvider(ctx context.Context, arg GetProviderParams) (Provi
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LastHealthStatus,
+		&i.LastHealthCheckedAt,
+		&i.LastErrorCode,
+		&i.LastErrorMessage,
 	)
 	return i, err
 }
 
 const listProviders = `-- name: ListProviders :many
-SELECT id, org_id, name, type, base_url, timeout_ms, status, created_at, updated_at
+SELECT id, org_id, name, type, base_url, timeout_ms, status, created_at, updated_at, last_health_status, last_health_checked_at, last_error_code, last_error_message
 FROM providers
 WHERE org_id = $1
 ORDER BY created_at DESC, id DESC
@@ -122,6 +130,10 @@ func (q *Queries) ListProviders(ctx context.Context, orgID uuid.UUID) ([]Provide
 			&i.Status,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.LastHealthStatus,
+			&i.LastHealthCheckedAt,
+			&i.LastErrorCode,
+			&i.LastErrorMessage,
 		); err != nil {
 			return nil, err
 		}
@@ -131,4 +143,55 @@ func (q *Queries) ListProviders(ctx context.Context, orgID uuid.UUID) ([]Provide
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateProviderHealth = `-- name: UpdateProviderHealth :one
+UPDATE providers
+SET
+  last_health_status = $3,
+  last_health_checked_at = $4,
+  last_error_code = $5,
+  last_error_message = $6,
+  updated_at = $7
+WHERE org_id = $1 AND id = $2
+RETURNING id, org_id, name, type, base_url, timeout_ms, status, created_at, updated_at, last_health_status, last_health_checked_at, last_error_code, last_error_message
+`
+
+type UpdateProviderHealthParams struct {
+	OrgID               uuid.UUID   `db:"org_id" json:"org_id"`
+	ID                  uuid.UUID   `db:"id" json:"id"`
+	LastHealthStatus    pgtype.Text `db:"last_health_status" json:"last_health_status"`
+	LastHealthCheckedAt *time.Time  `db:"last_health_checked_at" json:"last_health_checked_at"`
+	LastErrorCode       pgtype.Text `db:"last_error_code" json:"last_error_code"`
+	LastErrorMessage    pgtype.Text `db:"last_error_message" json:"last_error_message"`
+	UpdatedAt           time.Time   `db:"updated_at" json:"updated_at"`
+}
+
+func (q *Queries) UpdateProviderHealth(ctx context.Context, arg UpdateProviderHealthParams) (Provider, error) {
+	row := q.db.QueryRow(ctx, updateProviderHealth,
+		arg.OrgID,
+		arg.ID,
+		arg.LastHealthStatus,
+		arg.LastHealthCheckedAt,
+		arg.LastErrorCode,
+		arg.LastErrorMessage,
+		arg.UpdatedAt,
+	)
+	var i Provider
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.Name,
+		&i.Type,
+		&i.BaseUrl,
+		&i.TimeoutMs,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastHealthStatus,
+		&i.LastHealthCheckedAt,
+		&i.LastErrorCode,
+		&i.LastErrorMessage,
+	)
+	return i, err
 }
