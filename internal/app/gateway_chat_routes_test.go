@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -95,11 +96,69 @@ func TestGatewayChatCompletionsRejectsAuthFailures(t *testing.T) {
 	assertAppTableCount(t, context.Background(), st, "request_logs", 0)
 }
 
-func TestGatewayChatCompletionsRejectsStream(t *testing.T) {
-	router, _, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+func TestGatewayChatCompletionsStreamsWithMockProvider(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
 
 	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"fast-chat","messages":[{"role":"user","content":"hello"}],"stream":true}`)
-	assertGatewayError(t, rec, http.StatusBadRequest, "stream_not_supported")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /v1/chat/completions stream status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "text/event-stream") {
+		t.Fatalf("Content-Type = %q, want text/event-stream", contentType)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "data: ") || !strings.Contains(body, "data: [DONE]") {
+		t.Fatalf("stream body = %q, want SSE data and [DONE]", body)
+	}
+
+	assertAppTableCount(t, ctx, st, "request_logs", 1)
+	assertAppTableCount(t, ctx, st, "usage_records", 1)
+	assertAppTableCount(t, ctx, st, "cost_records", 1)
+}
+
+func TestGatewayChatCompletionsStreamUsageMissingWritesRequestLogOnly(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeAppSSE(t, w, `{"choices":[{"delta":{"content":"hello"}}]}`)
+		writeAppSSE(t, w, `[DONE]`)
+	}))
+	defer server.Close()
+
+	provider := createProviderViaHTTP(t, router, apiKey.AdminToken, createProviderRequest{
+		Name:      "stream-provider",
+		Type:      "openai_compatible",
+		BaseURL:   stringPtr(server.URL + "/v1"),
+		APIKey:    stringPtr("provider-secret-key"),
+		TimeoutMS: 1000,
+	})
+	model := createModelViaHTTP(t, router, apiKey.AdminToken, createModelRequest{
+		ProviderID:                     provider.ID,
+		ProviderModelName:              "stream-small",
+		DisplayName:                    "Stream Small",
+		InputPriceMicroUSDPer1KTokens:  100,
+		OutputPriceMicroUSDPer1KTokens: 200,
+	})
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "stream-missing-usage",
+		MatchModel: "stream-missing",
+		Strategy:   "single",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: provider.ID, ModelID: model.ID, Priority: 1, Weight: 100},
+		},
+	})
+
+	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"stream-missing","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /v1/chat/completions stream status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	assertAppTableCount(t, ctx, st, "request_logs", 1)
+	assertAppTableCount(t, ctx, st, "usage_records", 0)
+	assertAppTableCount(t, ctx, st, "cost_records", 0)
+	assertAppRequestLogErrorCode(t, ctx, st, "usage_missing")
 }
 
 func TestGatewayChatCompletionsRouteNotFound(t *testing.T) {
@@ -282,5 +341,27 @@ func assertAppRequestLogStatus(t *testing.T, ctx context.Context, st *store.Stor
 	}
 	if got != want {
 		t.Fatalf("request log status = %q, want %q", got, want)
+	}
+}
+
+func assertAppRequestLogErrorCode(t *testing.T, ctx context.Context, st *store.Store, want string) {
+	t.Helper()
+
+	var got string
+	if err := st.Pool.QueryRow(ctx, `SELECT error_code FROM request_logs ORDER BY started_at DESC LIMIT 1`).Scan(&got); err != nil {
+		t.Fatalf("select latest request log error_code: %v", err)
+	}
+	if got != want {
+		t.Fatalf("request log error_code = %q, want %q", got, want)
+	}
+}
+
+func writeAppSSE(t *testing.T, w http.ResponseWriter, data string) {
+	t.Helper()
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+		t.Fatalf("write SSE: %v", err)
+	}
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
 	}
 }
