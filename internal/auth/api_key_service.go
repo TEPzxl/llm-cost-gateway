@@ -27,11 +27,14 @@ type APIKeyPrincipal struct {
 }
 
 type CreateAPIKeyParams struct {
-	OrgID     uuid.UUID
-	Name      string
-	Scopes    []string
-	RPMLimit  int32
-	ExpiresAt *time.Time
+	OrgID                    uuid.UUID
+	Name                     string
+	Scopes                   []string
+	RPMLimit                 int32
+	DailyCostLimitMicroUSD   *int64
+	MonthlyCostLimitMicroUSD *int64
+	QuotaAction              string
+	ExpiresAt                *time.Time
 }
 
 type CreateAPIKeyResult struct {
@@ -64,6 +67,16 @@ func (s *APIKeyService) CreateAPIKey(ctx context.Context, params CreateAPIKeyPar
 	if params.RPMLimit <= 0 {
 		return CreateAPIKeyResult{}, fmt.Errorf("rpm_limit must be greater than zero")
 	}
+	if err := validateQuotaLimit("daily_cost_limit_micro_usd", params.DailyCostLimitMicroUSD); err != nil {
+		return CreateAPIKeyResult{}, err
+	}
+	if err := validateQuotaLimit("monthly_cost_limit_micro_usd", params.MonthlyCostLimitMicroUSD); err != nil {
+		return CreateAPIKeyResult{}, err
+	}
+	quotaAction, err := validateQuotaAction(params.QuotaAction)
+	if err != nil {
+		return CreateAPIKeyResult{}, err
+	}
 
 	scopes := params.Scopes
 	if len(scopes) == 0 {
@@ -76,16 +89,19 @@ func (s *APIKeyService) CreateAPIKey(ctx context.Context, params CreateAPIKeyPar
 	}
 	now := s.now()
 	apiKey, err := s.queries.CreateAPIKey(ctx, db.CreateAPIKeyParams{
-		ID:        uuid.New(),
-		OrgID:     params.OrgID,
-		Name:      name,
-		KeyPrefix: visibleCredentialPrefix(key, APIKeyPlainPrefix),
-		KeyHash:   s.hasher.Hash(key),
-		Scopes:    scopes,
-		Status:    "active",
-		RpmLimit:  params.RPMLimit,
-		ExpiresAt: params.ExpiresAt,
-		CreatedAt: now,
+		ID:                       uuid.New(),
+		OrgID:                    params.OrgID,
+		Name:                     name,
+		KeyPrefix:                visibleCredentialPrefix(key, APIKeyPlainPrefix),
+		KeyHash:                  s.hasher.Hash(key),
+		Scopes:                   scopes,
+		Status:                   "active",
+		RpmLimit:                 params.RPMLimit,
+		DailyCostLimitMicroUsd:   nullableInt8(params.DailyCostLimitMicroUSD),
+		MonthlyCostLimitMicroUsd: nullableInt8(params.MonthlyCostLimitMicroUSD),
+		QuotaAction:              quotaAction,
+		ExpiresAt:                params.ExpiresAt,
+		CreatedAt:                now,
 	})
 	if err != nil {
 		return CreateAPIKeyResult{}, err

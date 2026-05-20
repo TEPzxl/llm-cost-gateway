@@ -12,6 +12,7 @@ const (
 	CodeConflict            = "conflict"
 	CodeRateLimitExceeded   = "rate_limit_exceeded"
 	CodeBudgetExceeded      = "budget_exceeded"
+	CodeAPIKeyQuotaExceeded = "api_key_quota_exceeded"
 	CodeProviderError       = "provider_error"
 	CodeProviderUnavailable = "provider_unavailable"
 	CodeProviderTimeout     = "provider_timeout"
