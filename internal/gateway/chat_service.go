@@ -91,6 +91,15 @@ type CostBody struct {
 	TotalCostMicro int64  `json:"total_cost_micro"`
 }
 
+type providerAttemptMetadata struct {
+	ProviderID uuid.UUID `json:"provider_id"`
+	ModelID    uuid.UUID `json:"model_id"`
+	Priority   int32     `json:"priority"`
+	Result     string    `json:"result"`
+	ErrorCode  string    `json:"error_code,omitempty"`
+	Retryable  bool      `json:"retryable,omitempty"`
+}
+
 func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observability.Metrics) *ChatService {
 	return &ChatService{
 		store:               st,
@@ -133,7 +142,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 		return ChatResult{}, domain.NewError(http.StatusPaymentRequired, domain.CodeBudgetExceeded, "budget exceeded")
 	}
 
-	resolved, err := s.resolver.Resolve(ctx, routing.ResolveParams{
+	resolved, err := s.resolver.ResolveTargets(ctx, routing.ResolveParams{
 		OrgID:          input.Principal.OrgID,
 		RequestedModel: request.Model,
 	})
@@ -146,44 +155,88 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 		return ChatResult{}, err
 	}
 
-	adapter, err := s.registry.AdapterFor(resolved.Provider.Type)
-	if err != nil {
-		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "", &resolved.Provider.ID, &resolved.Model.ID, nil, startedAt)
-		s.metrics.ObserveGatewayRequest("error", resolved.Provider.Name, request.Model, s.clock().Sub(startedAt))
-		return ChatResult{}, domain.NewError(http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "provider unavailable")
-	}
-	providerConfig, err := s.providerConfig(ctx, resolved.Provider)
-	if err != nil {
-		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "", &resolved.Provider.ID, &resolved.Model.ID, nil, startedAt)
-		s.metrics.ObserveGatewayRequest("error", resolved.Provider.Name, request.Model, s.clock().Sub(startedAt))
-		return ChatResult{}, domain.NewError(http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "provider unavailable")
+	includeFallbackMetadata := resolved.RoutePolicy.Strategy == routing.StrategyFallback
+	var attempts []providerAttemptMetadata
+	var selected routing.ResolvedTarget
+	var providerStarted time.Time
+	var providerResponse *contract.ChatResponse
+	var lastErr error
+	var lastCode string
+	var lastStatus int
+	for index, target := range resolved.Targets {
+		selected = target
+		adapter, err := s.registry.AdapterFor(target.Provider.Type)
+		if err != nil {
+			lastErr = err
+			lastStatus = http.StatusServiceUnavailable
+			lastCode = domain.CodeProviderUnavailable
+			attempts = appendProviderAttempt(attempts, target, "error", lastCode, true)
+			if shouldTryNextFallbackTarget(includeFallbackMetadata, true, index, len(resolved.Targets)) {
+				s.metrics.ObserveProviderRequest(target.Provider.Name, request.Model, "error", lastCode)
+				continue
+			}
+			break
+		}
+		providerConfig, err := s.providerConfig(ctx, target.Provider)
+		if err != nil {
+			lastErr = err
+			lastStatus = http.StatusServiceUnavailable
+			lastCode = domain.CodeProviderUnavailable
+			attempts = appendProviderAttempt(attempts, target, "error", lastCode, true)
+			if shouldTryNextFallbackTarget(includeFallbackMetadata, true, index, len(resolved.Targets)) {
+				s.metrics.ObserveProviderRequest(target.Provider.Name, request.Model, "error", lastCode)
+				continue
+			}
+			break
+		}
+
+		providerStarted = s.clock()
+		providerResponse, err = adapter.Chat(ctx, contract.ChatRequest{
+			RequestID:   input.RequestID.String(),
+			OrgID:       input.Principal.OrgID,
+			Provider:    providerConfig,
+			Model:       contract.ModelConfig{ID: target.Model.ID, ProviderModelName: target.Model.ProviderModelName, DisplayName: target.Model.DisplayName},
+			Messages:    request.Messages,
+			Temperature: request.Temperature,
+			MaxTokens:   request.MaxTokens,
+			Stream:      false,
+		})
+		if err == nil {
+			attempts = appendProviderAttempt(attempts, target, "success", "", false)
+			break
+		}
+		lastErr = err
+		lastStatus, lastCode = providerErrorStatus(err)
+		retryable := fallbackRetryable(err)
+		attempts = appendProviderAttempt(attempts, target, "error", lastCode, retryable)
+		s.metrics.ObserveProviderRequest(target.Provider.Name, request.Model, "error", lastCode)
+		if shouldTryNextFallbackTarget(includeFallbackMetadata, retryable, index, len(resolved.Targets)) {
+			continue
+		}
+		break
 	}
 
-	providerStarted := s.clock()
-	providerResponse, err := adapter.Chat(ctx, contract.ChatRequest{
-		RequestID:   input.RequestID.String(),
-		OrgID:       input.Principal.OrgID,
-		Provider:    providerConfig,
-		Model:       contract.ModelConfig{ID: resolved.Model.ID, ProviderModelName: resolved.Model.ProviderModelName, DisplayName: resolved.Model.DisplayName},
-		Messages:    request.Messages,
-		Temperature: request.Temperature,
-		MaxTokens:   request.MaxTokens,
-		Stream:      false,
-	})
-	if err != nil {
-		status, code := providerErrorStatus(err)
-		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, status, code, "", &resolved.Provider.ID, &resolved.Model.ID, nil, startedAt)
-		s.metrics.ObserveProviderRequest(resolved.Provider.Name, request.Model, "error", code)
-		s.metrics.ObserveGatewayRequest("error", resolved.Provider.Name, request.Model, s.clock().Sub(startedAt))
-		return ChatResult{}, domain.NewError(status, code, "provider request failed")
+	if providerResponse == nil {
+		if lastErr == nil {
+			lastStatus = http.StatusServiceUnavailable
+			lastCode = domain.CodeProviderUnavailable
+		}
+		if includeFallbackMetadata && fallbackRetryable(lastErr) && len(attempts) == len(resolved.Targets) {
+			lastStatus = http.StatusServiceUnavailable
+			lastCode = domain.CodeProviderUnavailable
+		}
+		metadata := chatMetadata(budgetCheck, attempts, includeFallbackMetadata)
+		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, lastStatus, lastCode, "", &selected.Provider.ID, &selected.Model.ID, metadata, startedAt)
+		s.metrics.ObserveGatewayRequest("error", selected.Provider.Name, request.Model, s.clock().Sub(startedAt))
+		return ChatResult{}, domain.NewError(lastStatus, lastCode, "provider request failed")
 	}
-	s.metrics.ObserveProviderRequest(resolved.Provider.Name, request.Model, "success", "")
+	s.metrics.ObserveProviderRequest(selected.Provider.Name, request.Model, "success", "")
 
 	providerLatencyMS := int32(providerResponse.LatencyMS)
 	if providerLatencyMS == 0 {
 		providerLatencyMS = int32(s.clock().Sub(providerStarted).Milliseconds())
 	}
-	metadata := budgetMetadata(budgetCheck)
+	metadata := chatMetadata(budgetCheck, attempts, includeFallbackMetadata)
 	successStatus := metering.StatusSuccess
 	if budgetCheck.Warning {
 		successStatus = metering.StatusBudgetWarned
@@ -193,8 +246,8 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 		RequestID:                      input.RequestID,
 		OrgID:                          input.Principal.OrgID,
 		APIKeyID:                       input.Principal.APIKeyID,
-		ProviderID:                     resolved.Provider.ID,
-		ModelID:                        resolved.Model.ID,
+		ProviderID:                     selected.Provider.ID,
+		ModelID:                        selected.Model.ID,
 		RoutePolicyID:                  &resolved.RoutePolicy.ID,
 		Method:                         input.Method,
 		Path:                           input.Path,
@@ -209,8 +262,8 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 		ProviderUsageJSON:              rawUsage,
 		PromptTokens:                   int64(providerResponse.Usage.PromptTokens),
 		CompletionTokens:               int64(providerResponse.Usage.CompletionTokens),
-		InputPriceMicroUSDPer1KTokens:  resolved.Model.InputPriceMicroUsdPer1kTokens,
-		OutputPriceMicroUSDPer1KTokens: resolved.Model.OutputPriceMicroUsdPer1kTokens,
+		InputPriceMicroUSDPer1KTokens:  selected.Model.InputPriceMicroUsdPer1kTokens,
+		OutputPriceMicroUSDPer1KTokens: selected.Model.OutputPriceMicroUsdPer1kTokens,
 		StartedAt:                      startedAt,
 		CompletedAt:                    s.clock(),
 	})
@@ -221,7 +274,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	if budgetCheck.Warning {
 		statusLabel = metering.StatusBudgetWarned
 	}
-	s.metrics.ObserveGatewayRequest(statusLabel, resolved.Provider.Name, request.Model, s.clock().Sub(startedAt))
+	s.metrics.ObserveGatewayRequest(statusLabel, selected.Provider.Name, request.Model, s.clock().Sub(startedAt))
 	s.metrics.AddTokens(request.Model, int64(providerResponse.Usage.PromptTokens), int64(providerResponse.Usage.CompletionTokens))
 	s.metrics.AddCostMicroUSD(request.Model, metered.CostRecord.TotalCostMicro)
 
@@ -231,9 +284,9 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 		Created: s.clock().Unix(),
 		Model:   request.Model,
 		Provider: ProviderBody{
-			ID:    resolved.Provider.ID,
-			Name:  resolved.Provider.Name,
-			Model: resolved.Model.ProviderModelName,
+			ID:    selected.Provider.ID,
+			Name:  selected.Provider.Name,
+			Model: selected.Model.ProviderModelName,
 		},
 		Choices: []ChoiceBody{
 			{
@@ -331,30 +384,90 @@ func providerErrorStatus(err error) (int, string) {
 	}
 }
 
-func budgetMetadata(result budget.CheckResult) *json.RawMessage {
-	if result.Status == nil {
+func appendProviderAttempt(attempts []providerAttemptMetadata, target routing.ResolvedTarget, result string, errorCode string, retryable bool) []providerAttemptMetadata {
+	return append(attempts, providerAttemptMetadata{
+		ProviderID: target.Provider.ID,
+		ModelID:    target.Model.ID,
+		Priority:   target.RouteTarget.Priority,
+		Result:     result,
+		ErrorCode:  errorCode,
+		Retryable:  retryable,
+	})
+}
+
+func shouldTryNextFallbackTarget(fallbackPolicy bool, retryable bool, index int, targetCount int) bool {
+	return fallbackPolicy && retryable && index < targetCount-1
+}
+
+func fallbackRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if contract.Retryable(err) {
+		return true
+	}
+	switch contract.ErrorCode(err) {
+	case domain.CodeProviderTimeout, domain.CodeProviderUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+func chatMetadata(result budget.CheckResult, attempts []providerAttemptMetadata, includeFallback bool) *json.RawMessage {
+	body := map[string]any{}
+	if budgetBody := budgetMetadataBody(result); budgetBody != nil {
+		body["budget"] = budgetBody
+	}
+	if includeFallback {
+		fallbackCount := len(attempts) - 1
+		if fallbackCount < 0 {
+			fallbackCount = 0
+		}
+		body["fallback_count"] = fallbackCount
+		body["attempted_targets"] = attempts
+	}
+	if len(body) == 0 {
 		return nil
 	}
-	body, err := json.Marshal(map[string]any{
-		"budget": map[string]any{
-			"id":                   result.Status.Budget.ID,
-			"action":               result.Action,
-			"used_micro_usd":       result.Status.UsedMicroUSD,
-			"limit_micro_usd":      result.Status.Budget.LimitMicroUsd,
-			"remaining_micro_usd":  result.Status.RemainingMicroUSD,
-			"exceeded":             result.Status.Exceeded,
-			"period":               result.Status.Budget.Period,
-			"window_start":         result.Status.WindowStart,
-			"window_end":           result.Status.WindowEnd,
-			"pre_check_only":       true,
-			"projected_cost_known": false,
-		},
-	})
+	rawBody, err := json.Marshal(body)
 	if err != nil {
 		return nil
 	}
-	raw := json.RawMessage(body)
+	raw := json.RawMessage(rawBody)
 	return &raw
+}
+
+func budgetMetadata(result budget.CheckResult) *json.RawMessage {
+	body := budgetMetadataBody(result)
+	if body == nil {
+		return nil
+	}
+	rawBody, err := json.Marshal(map[string]any{"budget": body})
+	if err != nil {
+		return nil
+	}
+	raw := json.RawMessage(rawBody)
+	return &raw
+}
+
+func budgetMetadataBody(result budget.CheckResult) map[string]any {
+	if result.Status == nil {
+		return nil
+	}
+	return map[string]any{
+		"id":                   result.Status.Budget.ID,
+		"action":               result.Action,
+		"used_micro_usd":       result.Status.UsedMicroUSD,
+		"limit_micro_usd":      result.Status.Budget.LimitMicroUsd,
+		"remaining_micro_usd":  result.Status.RemainingMicroUSD,
+		"exceeded":             result.Status.Exceeded,
+		"period":               result.Status.Budget.Period,
+		"window_start":         result.Status.WindowStart,
+		"window_end":           result.Status.WindowEnd,
+		"pre_check_only":       true,
+		"projected_cost_known": false,
+	}
 }
 
 func hashBytes(body []byte) string {

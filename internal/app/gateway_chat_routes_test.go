@@ -161,6 +161,124 @@ func TestGatewayChatCompletionsStreamUsageMissingWritesRequestLogOnly(t *testing
 	assertAppRequestLogErrorCode(t, ctx, st, "usage_missing")
 }
 
+func TestGatewayChatCompletionsFallbackRetriesNextTarget(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	failingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":{"message":"temporary failure"}}`))
+	}))
+	defer failingServer.Close()
+
+	failingProvider, failingModel := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "fallback-failing", failingServer.URL, 1)
+	successProvider := createProviderViaHTTP(t, router, apiKey.AdminToken, createProviderRequest{
+		Name:      "fallback-mock-provider",
+		Type:      "mock",
+		TimeoutMS: 30000,
+	})
+	successModel := createModelViaHTTP(t, router, apiKey.AdminToken, createModelRequest{
+		ProviderID:                     successProvider.ID,
+		ProviderModelName:              "mock-fallback-success",
+		DisplayName:                    "Mock Fallback Success",
+		InputPriceMicroUSDPer1KTokens:  100,
+		OutputPriceMicroUSDPer1KTokens: 200,
+	})
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "fallback-success-policy",
+		MatchModel: "fallback-success",
+		Strategy:   "fallback",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: failingProvider.ID, ModelID: failingModel.ID, Priority: 1, Weight: 100},
+			{ProviderID: successProvider.ID, ModelID: successModel.ID, Priority: 2, Weight: 100},
+		},
+	})
+
+	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"fallback-success","messages":[{"role":"user","content":"hello"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("fallback chat status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	assertAppTableCount(t, ctx, st, "request_logs", 1)
+	assertAppTableCount(t, ctx, st, "usage_records", 1)
+	assertAppTableCount(t, ctx, st, "cost_records", 1)
+	assertAppRequestLogProvider(t, ctx, st, successProvider.ID)
+	assertAppRequestLogFallbackCount(t, ctx, st, 1)
+}
+
+func TestGatewayChatCompletionsFallbackStopsOnNonRetryableError(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	unauthorizedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"bad key"}}`))
+	}))
+	defer unauthorizedServer.Close()
+
+	firstProvider, firstModel := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "fallback-unauthorized", unauthorizedServer.URL, 1)
+	secondProvider := createProviderViaHTTP(t, router, apiKey.AdminToken, createProviderRequest{
+		Name:      "fallback-should-not-run",
+		Type:      "mock",
+		TimeoutMS: 30000,
+	})
+	secondModel := createModelViaHTTP(t, router, apiKey.AdminToken, createModelRequest{
+		ProviderID:                     secondProvider.ID,
+		ProviderModelName:              "mock-should-not-run",
+		DisplayName:                    "Mock Should Not Run",
+		InputPriceMicroUSDPer1KTokens:  100,
+		OutputPriceMicroUSDPer1KTokens: 200,
+	})
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "fallback-non-retryable-policy",
+		MatchModel: "fallback-non-retryable",
+		Strategy:   "fallback",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: firstProvider.ID, ModelID: firstModel.ID, Priority: 1, Weight: 100},
+			{ProviderID: secondProvider.ID, ModelID: secondModel.ID, Priority: 2, Weight: 100},
+		},
+	})
+
+	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"fallback-non-retryable","messages":[{"role":"user","content":"hello"}]}`)
+	assertGatewayError(t, rec, http.StatusBadGateway, "provider_error")
+
+	assertAppTableCount(t, ctx, st, "request_logs", 1)
+	assertAppTableCount(t, ctx, st, "usage_records", 0)
+	assertAppTableCount(t, ctx, st, "cost_records", 0)
+	assertAppRequestLogProvider(t, ctx, st, firstProvider.ID)
+	assertAppRequestLogFallbackCount(t, ctx, st, 0)
+}
+
+func TestGatewayChatCompletionsFallbackAllTargetsFail(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	serverA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer serverA.Close()
+	serverB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer serverB.Close()
+
+	providerA, modelA := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "fallback-fail-a", serverA.URL, 1)
+	providerB, modelB := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "fallback-fail-b", serverB.URL, 2)
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "fallback-all-fail-policy",
+		MatchModel: "fallback-all-fail",
+		Strategy:   "fallback",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: providerA.ID, ModelID: modelA.ID, Priority: 1, Weight: 100},
+			{ProviderID: providerB.ID, ModelID: modelB.ID, Priority: 2, Weight: 100},
+		},
+	})
+
+	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"fallback-all-fail","messages":[{"role":"user","content":"hello"}]}`)
+	assertGatewayError(t, rec, http.StatusServiceUnavailable, "provider_unavailable")
+
+	assertAppTableCount(t, ctx, st, "request_logs", 1)
+	assertAppRequestLogProvider(t, ctx, st, providerB.ID)
+	assertAppRequestLogFallbackCount(t, ctx, st, 1)
+}
+
 func TestGatewayChatCompletionsRouteNotFound(t *testing.T) {
 	router, _, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
 
@@ -354,6 +472,50 @@ func assertAppRequestLogErrorCode(t *testing.T, ctx context.Context, st *store.S
 	if got != want {
 		t.Fatalf("request log error_code = %q, want %q", got, want)
 	}
+}
+
+func assertAppRequestLogProvider(t *testing.T, ctx context.Context, st *store.Store, want uuid.UUID) {
+	t.Helper()
+
+	var got uuid.UUID
+	if err := st.Pool.QueryRow(ctx, `SELECT provider_id FROM request_logs ORDER BY started_at DESC LIMIT 1`).Scan(&got); err != nil {
+		t.Fatalf("select latest request log provider_id: %v", err)
+	}
+	if got != want {
+		t.Fatalf("request log provider_id = %s, want %s", got, want)
+	}
+}
+
+func assertAppRequestLogFallbackCount(t *testing.T, ctx context.Context, st *store.Store, want int) {
+	t.Helper()
+
+	var got int
+	if err := st.Pool.QueryRow(ctx, `SELECT COALESCE((metadata->>'fallback_count')::int, 0) FROM request_logs ORDER BY started_at DESC LIMIT 1`).Scan(&got); err != nil {
+		t.Fatalf("select latest request log fallback_count: %v", err)
+	}
+	if got != want {
+		t.Fatalf("fallback_count = %d, want %d", got, want)
+	}
+}
+
+func createOpenAICompatibleRouteTarget(t *testing.T, router http.Handler, adminToken string, name string, baseURL string, price int64) (providerResponse, modelResponse) {
+	t.Helper()
+
+	provider := createProviderViaHTTP(t, router, adminToken, createProviderRequest{
+		Name:      name + "-provider",
+		Type:      "openai_compatible",
+		BaseURL:   stringPtr(baseURL + "/v1"),
+		APIKey:    stringPtr("provider-secret-key"),
+		TimeoutMS: 1000,
+	})
+	model := createModelViaHTTP(t, router, adminToken, createModelRequest{
+		ProviderID:                     provider.ID,
+		ProviderModelName:              name + "-model",
+		DisplayName:                    name + " Model",
+		InputPriceMicroUSDPer1KTokens:  price,
+		OutputPriceMicroUSDPer1KTokens: price,
+	})
+	return provider, model
 }
 
 func writeAppSSE(t *testing.T, w http.ResponseWriter, data string) {
