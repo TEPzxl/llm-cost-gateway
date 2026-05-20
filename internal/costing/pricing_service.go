@@ -161,6 +161,12 @@ func (s *PricingService) UpdateModelPricing(ctx context.Context, params UpdateMo
 }
 
 func (s *PricingService) ListModelPricingVersions(ctx context.Context, orgID uuid.UUID, modelID uuid.UUID) ([]db.ModelPricingVersion, error) {
+	if _, err := s.store.Queries.GetModel(ctx, db.GetModelParams{OrgID: orgID, ID: modelID}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrModelPricingNotFound
+		}
+		return nil, err
+	}
 	return s.store.Queries.ListModelPricingVersions(ctx, db.ListModelPricingVersionsParams{
 		OrgID:   orgID,
 		ModelID: modelID,

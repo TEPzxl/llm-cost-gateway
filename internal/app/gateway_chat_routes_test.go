@@ -538,6 +538,48 @@ func TestGatewayChatCompletionsAPIKeyQuotaWarnRecordsMetadata(t *testing.T) {
 	assertAppRequestLogAPIKeyQuota(t, ctx, st, "daily", "warn", true)
 }
 
+func TestGatewayChatCompletionsUsesLatestPricingVersionAndPreservesHistory(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	models, err := st.Queries.ListModels(ctx, apiKey.OrgID)
+	if err != nil {
+		t.Fatalf("ListModels returned error: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("model count = %d, want 1", len(models))
+	}
+
+	first := performChatCompletion(t, router, apiKey.Key, `{"model":"fast-chat","messages":[{"role":"user","content":"hello"}]}`)
+	firstBody := decodeGatewayChatResponse(t, first)
+	if firstBody.Cost.TotalCostMicro != 8 {
+		t.Fatalf("first cost = %d, want 8", firstBody.Cost.TotalCostMicro)
+	}
+	firstCost := readAppCostPricingVersion(t, ctx, st, firstBody.RequestID)
+	if firstCost.totalCostMicro != 8 || firstCost.version != 1 {
+		t.Fatalf("first cost record = %+v, want cost 8 version 1", firstCost)
+	}
+
+	updateModelPricingViaHTTP(t, router, apiKey.AdminToken, models[0].ID, updateModelPricingRequest{
+		InputPriceMicroUSDPer1KTokens:  1000,
+		OutputPriceMicroUSDPer1KTokens: 1000,
+	}, http.StatusOK)
+
+	second := performChatCompletion(t, router, apiKey.Key, `{"model":"fast-chat","messages":[{"role":"user","content":"hello"}]}`)
+	secondBody := decodeGatewayChatResponse(t, second)
+	if secondBody.Cost.TotalCostMicro != 50 {
+		t.Fatalf("second cost = %d, want 50", secondBody.Cost.TotalCostMicro)
+	}
+	secondCost := readAppCostPricingVersion(t, ctx, st, secondBody.RequestID)
+	if secondCost.totalCostMicro != 50 || secondCost.version != 2 {
+		t.Fatalf("second cost record = %+v, want cost 50 version 2", secondCost)
+	}
+
+	firstCostAgain := readAppCostPricingVersion(t, ctx, st, firstBody.RequestID)
+	if firstCostAgain.totalCostMicro != 8 || firstCostAgain.version != 1 || firstCostAgain.pricingVersionID != firstCost.pricingVersionID {
+		t.Fatalf("first cost record after price update = %+v, want unchanged cost 8 version 1 id %s", firstCostAgain, firstCost.pricingVersionID)
+	}
+}
+
 type fakeGatewayLimiter struct {
 	decision ratelimit.Decision
 	err      error
@@ -625,6 +667,52 @@ func performChatCompletion(t *testing.T, router http.Handler, apiKey string, bod
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	return rec
+}
+
+type gatewayChatResponseBody struct {
+	RequestID uuid.UUID `json:"request_id"`
+	Cost      struct {
+		TotalCostMicro int64 `json:"total_cost_micro"`
+	} `json:"cost"`
+}
+
+func decodeGatewayChatResponse(t *testing.T, rec *httptest.ResponseRecorder) gatewayChatResponseBody {
+	t.Helper()
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /v1/chat/completions status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var body gatewayChatResponseBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode chat completion response: %v", err)
+	}
+	return body
+}
+
+type appCostPricingVersion struct {
+	totalCostMicro   int64
+	pricingVersionID uuid.UUID
+	version          int32
+}
+
+func readAppCostPricingVersion(t *testing.T, ctx context.Context, st *store.Store, requestID uuid.UUID) appCostPricingVersion {
+	t.Helper()
+
+	var result appCostPricingVersion
+	if err := st.Pool.QueryRow(ctx, `
+		SELECT cr.total_cost_micro, cr.pricing_version_id, mpv.version
+		FROM cost_records cr
+		JOIN usage_records ur
+		  ON ur.org_id = cr.org_id
+		 AND ur.id = cr.usage_record_id
+		JOIN model_pricing_versions mpv
+		  ON mpv.org_id = cr.org_id
+		 AND mpv.id = cr.pricing_version_id
+		WHERE ur.request_log_id = $1
+	`, requestID).Scan(&result.totalCostMicro, &result.pricingVersionID, &result.version); err != nil {
+		t.Fatalf("read cost pricing version for request %s: %v", requestID, err)
+	}
+	return result
 }
 
 func assertGatewayError(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantCode string) {

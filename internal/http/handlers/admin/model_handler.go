@@ -1,11 +1,13 @@
 package admin
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/tep/llm-cost-gateway/internal/costing"
 	httpapi "github.com/tep/llm-cost-gateway/internal/http"
 	"github.com/tep/llm-cost-gateway/internal/http/middleware"
 	"github.com/tep/llm-cost-gateway/internal/provider"
@@ -14,10 +16,11 @@ import (
 
 type ModelHandler struct {
 	service *provider.Service
+	pricing *costing.PricingService
 }
 
-func NewModelHandler(service *provider.Service) *ModelHandler {
-	return &ModelHandler{service: service}
+func NewModelHandler(service *provider.Service, pricing *costing.PricingService) *ModelHandler {
+	return &ModelHandler{service: service, pricing: pricing}
 }
 
 type createModelRequest struct {
@@ -43,6 +46,33 @@ type modelResponse struct {
 
 type listModelsResponse struct {
 	Items []modelResponse `json:"items"`
+}
+
+type updateModelPricingRequest struct {
+	InputPriceMicroUSDPer1KTokens  int64 `json:"input_price_micro_usd_per_1k_tokens"`
+	OutputPriceMicroUSDPer1KTokens int64 `json:"output_price_micro_usd_per_1k_tokens"`
+}
+
+type modelPricingVersionResponse struct {
+	ID                             uuid.UUID  `json:"id"`
+	ModelID                        uuid.UUID  `json:"model_id"`
+	Version                        int32      `json:"version"`
+	InputPriceMicroUSDPer1KTokens  int64      `json:"input_price_micro_usd_per_1k_tokens"`
+	OutputPriceMicroUSDPer1KTokens int64      `json:"output_price_micro_usd_per_1k_tokens"`
+	Status                         string     `json:"status"`
+	EffectiveFrom                  time.Time  `json:"effective_from"`
+	EffectiveTo                    *time.Time `json:"effective_to"`
+	CreatedAt                      time.Time  `json:"created_at"`
+}
+
+type updateModelPricingResponse struct {
+	Model           modelResponse               `json:"model"`
+	PreviousVersion modelPricingVersionResponse `json:"previous_version"`
+	PricingVersion  modelPricingVersionResponse `json:"pricing_version"`
+}
+
+type listModelPricingVersionsResponse struct {
+	Items []modelPricingVersionResponse `json:"items"`
 }
 
 func (h *ModelHandler) Create(c *gin.Context) {
@@ -95,6 +125,66 @@ func (h *ModelHandler) List(c *gin.Context) {
 	httpapi.RespondJSON(c, http.StatusOK, listModelsResponse{Items: items})
 }
 
+func (h *ModelHandler) UpdatePricing(c *gin.Context) {
+	principal, ok := middleware.AdminTokenPrincipalFromContext(c)
+	if !ok {
+		httpapi.RespondError(c, httpapi.Unauthorized("unauthorized"))
+		return
+	}
+	modelID, err := uuid.Parse(c.Param("model_id"))
+	if err != nil {
+		httpapi.RespondError(c, httpapi.InvalidRequest("invalid model_id"))
+		return
+	}
+
+	var request updateModelPricingRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		httpapi.RespondError(c, httpapi.InvalidRequest("invalid JSON body"))
+		return
+	}
+	result, err := h.pricing.UpdateModelPricing(c.Request.Context(), costing.UpdateModelPricingParams{
+		OrgID:                          principal.OrgID,
+		ModelID:                        modelID,
+		InputPriceMicroUSDPer1KTokens:  request.InputPriceMicroUSDPer1KTokens,
+		OutputPriceMicroUSDPer1KTokens: request.OutputPriceMicroUSDPer1KTokens,
+	})
+	if err != nil {
+		respondPricingServiceError(c, err)
+		return
+	}
+
+	httpapi.RespondJSON(c, http.StatusOK, updateModelPricingResponse{
+		Model:           newModelResponse(result.Model),
+		PreviousVersion: newModelPricingVersionResponse(result.PreviousVersion),
+		PricingVersion:  newModelPricingVersionResponse(result.PricingVersion),
+	})
+}
+
+func (h *ModelHandler) ListPricingVersions(c *gin.Context) {
+	principal, ok := middleware.AdminTokenPrincipalFromContext(c)
+	if !ok {
+		httpapi.RespondError(c, httpapi.Unauthorized("unauthorized"))
+		return
+	}
+	modelID, err := uuid.Parse(c.Param("model_id"))
+	if err != nil {
+		httpapi.RespondError(c, httpapi.InvalidRequest("invalid model_id"))
+		return
+	}
+
+	versions, err := h.pricing.ListModelPricingVersions(c.Request.Context(), principal.OrgID, modelID)
+	if err != nil {
+		respondPricingServiceError(c, err)
+		return
+	}
+
+	items := make([]modelPricingVersionResponse, 0, len(versions))
+	for _, version := range versions {
+		items = append(items, newModelPricingVersionResponse(version))
+	}
+	httpapi.RespondJSON(c, http.StatusOK, listModelPricingVersionsResponse{Items: items})
+}
+
 func newModelResponse(item db.Model) modelResponse {
 	var contextWindow *int32
 	if item.ContextWindow.Valid {
@@ -111,5 +201,30 @@ func newModelResponse(item db.Model) modelResponse {
 		ContextWindow:                  contextWindow,
 		Status:                         item.Status,
 		CreatedAt:                      item.CreatedAt,
+	}
+}
+
+func newModelPricingVersionResponse(item db.ModelPricingVersion) modelPricingVersionResponse {
+	return modelPricingVersionResponse{
+		ID:                             item.ID,
+		ModelID:                        item.ModelID,
+		Version:                        item.Version,
+		InputPriceMicroUSDPer1KTokens:  item.InputPriceMicroUsdPer1kTokens,
+		OutputPriceMicroUSDPer1KTokens: item.OutputPriceMicroUsdPer1kTokens,
+		Status:                         item.Status,
+		EffectiveFrom:                  item.EffectiveFrom,
+		EffectiveTo:                    item.EffectiveTo,
+		CreatedAt:                      item.CreatedAt,
+	}
+}
+
+func respondPricingServiceError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, costing.ErrModelPricingNotFound):
+		httpapi.RespondError(c, httpapi.NotFound("model not found"))
+	case errors.Is(err, costing.ErrInvalidCostInput):
+		httpapi.RespondError(c, httpapi.InvalidRequest(err.Error()))
+	default:
+		httpapi.RespondError(c, httpapi.InternalError("internal server error"))
 	}
 }
