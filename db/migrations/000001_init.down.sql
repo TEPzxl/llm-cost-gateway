@@ -1,0 +1,15 @@
+DROP TABLE IF EXISTS cost_records;
+DROP TABLE IF EXISTS usage_records;
+DROP TABLE IF EXISTS request_logs;
+DROP TABLE IF EXISTS budgets;
+DROP TABLE IF EXISTS route_targets;
+DROP TABLE IF EXISTS route_policies;
+DROP TABLE IF EXISTS models;
+DROP TABLE IF EXISTS provider_secrets;
+DROP TABLE IF EXISTS providers;
+DROP TABLE IF EXISTS api_keys;
+DROP TABLE IF EXISTS admin_tokens;
+DROP TABLE IF EXISTS organizations;
+
+DROP EXTENSION IF EXISTS "uuid-ossp";
+DROP EXTENSION IF EXISTS pgcrypto;

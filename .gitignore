@@ -1,0 +1,13 @@
+.zed/
+.codex
+.agent
+
+docs/
+
+node_modules/
+dist/
+.next/
+out/
+*.tsbuildinfo
+.env
+coverage/

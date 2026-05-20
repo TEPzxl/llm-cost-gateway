@@ -1,0 +1,11 @@
+.git
+.gitignore
+.next
+dist
+node_modules
+web/console/.next
+web/console/dist
+web/console/node_modules
+coverage
+.env
+*.tsbuildinfo
