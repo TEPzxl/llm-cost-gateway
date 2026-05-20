@@ -58,6 +58,9 @@ func TestServiceRecordSuccessWritesRequestUsageAndCost(t *testing.T) {
 	if result.CostRecord.TotalCostMicro != 8 {
 		t.Fatalf("total cost = %d, want 8", result.CostRecord.TotalCostMicro)
 	}
+	if result.CostRecord.PricingVersionID == nil || *result.CostRecord.PricingVersionID != fixture.PricingVersionID {
+		t.Fatalf("pricing_version_id = %v, want %s", result.CostRecord.PricingVersionID, fixture.PricingVersionID)
+	}
 
 	var snapshot struct {
 		InputPriceMicroUSDPer1KTokens  int64  `json:"input_price_micro_usd_per_1k_tokens"`
@@ -123,6 +126,14 @@ func TestServiceRecordSuccessRollsBackWhenCostingFails(t *testing.T) {
 	resetMeteringTestDatabase(t, ctx, st)
 	fixture := createMeteringFixture(t, ctx, st)
 	service := NewService(st, costing.NewCalculator())
+	if _, err := st.Pool.Exec(ctx, `
+		UPDATE model_pricing_versions
+		SET input_price_micro_usd_per_1k_tokens = $2,
+		    output_price_micro_usd_per_1k_tokens = 0
+		WHERE id = $1
+	`, fixture.PricingVersionID, int64(math.MaxInt64)); err != nil {
+		t.Fatalf("update pricing version to overflow price: %v", err)
+	}
 
 	_, err := service.RecordSuccess(ctx, RecordSuccessInput{
 		RequestID:                      uuid.New(),
@@ -203,11 +214,12 @@ func TestServiceDoesNotPersistPromptOrResponseContent(t *testing.T) {
 }
 
 type meteringFixture struct {
-	OrgID         uuid.UUID
-	APIKeyID      uuid.UUID
-	ProviderID    uuid.UUID
-	ModelID       uuid.UUID
-	RoutePolicyID uuid.UUID
+	OrgID            uuid.UUID
+	APIKeyID         uuid.UUID
+	ProviderID       uuid.UUID
+	ModelID          uuid.UUID
+	RoutePolicyID    uuid.UUID
+	PricingVersionID uuid.UUID
 }
 
 func openMeteringTestStore(t *testing.T, ctx context.Context) *store.Store {
@@ -300,6 +312,20 @@ func createMeteringFixture(t *testing.T, ctx context.Context, st *store.Store) m
 	if err != nil {
 		t.Fatalf("CreateModel returned error: %v", err)
 	}
+	pricingVersion, err := st.Queries.CreateModelPricingVersion(ctx, db.CreateModelPricingVersionParams{
+		ID:                             uuid.New(),
+		OrgID:                          org.ID,
+		ModelID:                        model.ID,
+		Version:                        1,
+		InputPriceMicroUsdPer1kTokens:  model.InputPriceMicroUsdPer1kTokens,
+		OutputPriceMicroUsdPer1kTokens: model.OutputPriceMicroUsdPer1kTokens,
+		Status:                         "active",
+		EffectiveFrom:                  now,
+		CreatedAt:                      now,
+	})
+	if err != nil {
+		t.Fatalf("CreateModelPricingVersion returned error: %v", err)
+	}
 	policy, err := st.Queries.CreateRoutePolicy(ctx, db.CreateRoutePolicyParams{
 		ID:         uuid.New(),
 		OrgID:      org.ID,
@@ -315,11 +341,12 @@ func createMeteringFixture(t *testing.T, ctx context.Context, st *store.Store) m
 	}
 
 	return meteringFixture{
-		OrgID:         org.ID,
-		APIKeyID:      apiKey.ID,
-		ProviderID:    provider.ID,
-		ModelID:       model.ID,
-		RoutePolicyID: policy.ID,
+		OrgID:            org.ID,
+		APIKeyID:         apiKey.ID,
+		ProviderID:       provider.ID,
+		ModelID:          model.ID,
+		RoutePolicyID:    policy.ID,
+		PricingVersionID: pricingVersion.ID,
 	}
 }
 

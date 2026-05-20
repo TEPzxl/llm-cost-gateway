@@ -147,11 +147,18 @@ func (s *Service) RecordSuccess(ctx context.Context, input RecordSuccessInput) (
 			return err
 		}
 
+		pricingVersion, err := q.GetActiveModelPricingVersion(ctx, db.GetActiveModelPricingVersionParams{
+			OrgID:   input.OrgID,
+			ModelID: input.ModelID,
+		})
+		if err != nil {
+			return err
+		}
 		calculation, err := s.calculator.Calculate(costing.CalculateInput{
 			PromptTokens:                   input.PromptTokens,
 			CompletionTokens:               input.CompletionTokens,
-			InputPriceMicroUSDPer1KTokens:  input.InputPriceMicroUSDPer1KTokens,
-			OutputPriceMicroUSDPer1KTokens: input.OutputPriceMicroUSDPer1KTokens,
+			InputPriceMicroUSDPer1KTokens:  pricingVersion.InputPriceMicroUsdPer1kTokens,
+			OutputPriceMicroUSDPer1KTokens: pricingVersion.OutputPriceMicroUsdPer1kTokens,
 		})
 		if err != nil {
 			return err
@@ -161,17 +168,18 @@ func (s *Service) RecordSuccess(ctx context.Context, input RecordSuccessInput) (
 			return err
 		}
 		costRecord, err := q.InsertCostRecord(ctx, db.InsertCostRecordParams{
-			ID:              uuid.New(),
-			UsageRecordID:   usageRecord.ID,
-			OrgID:           input.OrgID,
-			ProviderID:      input.ProviderID,
-			ModelID:         input.ModelID,
-			Currency:        calculation.Currency,
-			InputCostMicro:  calculation.InputCostMicro,
-			OutputCostMicro: calculation.OutputCostMicro,
-			TotalCostMicro:  calculation.TotalCostMicro,
-			PricingSnapshot: pricingSnapshot,
-			CreatedAt:       completedAt,
+			ID:               uuid.New(),
+			UsageRecordID:    usageRecord.ID,
+			OrgID:            input.OrgID,
+			ProviderID:       input.ProviderID,
+			ModelID:          input.ModelID,
+			Currency:         calculation.Currency,
+			InputCostMicro:   calculation.InputCostMicro,
+			OutputCostMicro:  calculation.OutputCostMicro,
+			TotalCostMicro:   calculation.TotalCostMicro,
+			PricingVersionID: &pricingVersion.ID,
+			PricingSnapshot:  pricingSnapshot,
+			CreatedAt:        completedAt,
 		})
 		if err != nil {
 			return err
