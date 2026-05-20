@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/tep/llm-cost-gateway/internal/costing"
 	secretcrypto "github.com/tep/llm-cost-gateway/internal/crypto"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
@@ -137,19 +138,34 @@ func (s *Service) CreateModel(ctx context.Context, params CreateModelParams) (db
 	}
 
 	now := time.Now().UTC()
-	return s.store.Queries.CreateModel(ctx, db.CreateModelParams{
-		ID:                             uuid.New(),
-		OrgID:                          params.OrgID,
-		ProviderID:                     params.ProviderID,
-		ProviderModelName:              strings.TrimSpace(params.ProviderModelName),
-		DisplayName:                    strings.TrimSpace(params.DisplayName),
-		InputPriceMicroUsdPer1kTokens:  params.InputPriceMicroUSDPer1KTokens,
-		OutputPriceMicroUsdPer1kTokens: params.OutputPriceMicroUSDPer1KTokens,
-		ContextWindow:                  newPgInt4(params.ContextWindow),
-		Status:                         "active",
-		CreatedAt:                      now,
-		UpdatedAt:                      now,
+	var created db.Model
+	err := s.store.ExecTx(ctx, func(q *db.Queries) error {
+		model, err := q.CreateModel(ctx, db.CreateModelParams{
+			ID:                             uuid.New(),
+			OrgID:                          params.OrgID,
+			ProviderID:                     params.ProviderID,
+			ProviderModelName:              strings.TrimSpace(params.ProviderModelName),
+			DisplayName:                    strings.TrimSpace(params.DisplayName),
+			InputPriceMicroUsdPer1kTokens:  params.InputPriceMicroUSDPer1KTokens,
+			OutputPriceMicroUsdPer1kTokens: params.OutputPriceMicroUSDPer1KTokens,
+			ContextWindow:                  newPgInt4(params.ContextWindow),
+			Status:                         "active",
+			CreatedAt:                      now,
+			UpdatedAt:                      now,
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := costing.NewPricingService(s.store).CreateInitialVersionWithQueries(ctx, q, model, now); err != nil {
+			return err
+		}
+		created = model
+		return nil
 	})
+	if err != nil {
+		return db.Model{}, err
+	}
+	return created, nil
 }
 
 func (s *Service) ListModels(ctx context.Context, orgID uuid.UUID) ([]db.Model, error) {
