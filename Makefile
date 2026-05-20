@@ -1,7 +1,8 @@
-.PHONY: up down migrate-up migrate-down verify-migration test run console-install console-build
+.PHONY: up down migrate-up migrate-down verify-migration sqlc-generate test run console-install console-build
 
 CONFIG_FILE ?= configs/config.example.yaml
 COMPOSE ?= docker compose -f deploy/docker-compose.yml --project-directory .
+SQLC_VERSION ?= v1.31.1
 
 up:
 	$(COMPOSE) up -d --build
@@ -17,6 +18,9 @@ migrate-down:
 
 verify-migration:
 	./scripts/verify-migration-constraints.sh
+
+sqlc-generate:
+	go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 
 test:
 	go test ./cmd/... ./internal/...

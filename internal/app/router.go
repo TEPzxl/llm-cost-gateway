@@ -2,16 +2,115 @@ package app
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/tep/llm-cost-gateway/internal/auth"
+	"github.com/tep/llm-cost-gateway/internal/budget"
+	"github.com/tep/llm-cost-gateway/internal/costing"
+	gatewayservice "github.com/tep/llm-cost-gateway/internal/gateway"
+	"github.com/tep/llm-cost-gateway/internal/http/handlers/admin"
+	gatewayhandler "github.com/tep/llm-cost-gateway/internal/http/handlers/gateway"
 	"github.com/tep/llm-cost-gateway/internal/http/handlers/health"
+	"github.com/tep/llm-cost-gateway/internal/http/handlers/platform"
+	"github.com/tep/llm-cost-gateway/internal/http/middleware"
+	"github.com/tep/llm-cost-gateway/internal/metering"
+	"github.com/tep/llm-cost-gateway/internal/observability"
+	"github.com/tep/llm-cost-gateway/internal/provider"
+	"github.com/tep/llm-cost-gateway/internal/routing"
+	"github.com/tep/llm-cost-gateway/internal/store"
+	"go.uber.org/zap"
 )
 
-func NewRouter(appEnv string) *gin.Engine {
-	gin.SetMode(ginMode(appEnv))
+type RouterConfig struct {
+	AppEnv                 string
+	PlatformBootstrapToken string
+	TokenHashSecret        string
+	SecretEncryptionKey    string
+	Store                  *store.Store
+	RateLimiter            middleware.RateLimiter
+	Metrics                *observability.Metrics
+}
+
+func NewRouter(cfg RouterConfig, logger *zap.Logger) *gin.Engine {
+	gin.SetMode(ginMode(cfg.AppEnv))
 
 	router := gin.New()
+	router.Use(middleware.RequestID())
+	router.Use(middleware.SecurityHeaders())
+	router.Use(middleware.Logging(logger))
 	router.Use(gin.Recovery())
 	router.GET("/healthz", health.Health)
+	metrics := cfg.Metrics
+	if metrics == nil {
+		metrics = observability.NewMetrics()
+	}
+	router.GET("/metrics", gin.WrapH(metrics.Handler()))
+
+	if cfg.Store != nil {
+		registerPlatformRoutes(router, cfg)
+		registerAdminRoutes(router, cfg)
+		cfg.Metrics = metrics
+		if cfg.RateLimiter != nil {
+			registerGatewayRoutes(router, cfg)
+		}
+	}
+
 	return router
+}
+
+func registerGatewayRoutes(router *gin.Engine, cfg RouterConfig) {
+	apiKeyService := auth.NewAPIKeyService(cfg.Store.Queries, cfg.TokenHashSecret)
+	meteringService := metering.NewService(cfg.Store, costing.NewCalculator())
+	chatService := gatewayservice.NewChatService(cfg.Store, cfg.SecretEncryptionKey, cfg.Metrics)
+	chatHandler := gatewayhandler.NewChatCompletionsHandler(chatService)
+
+	group := router.Group("/v1")
+	group.Use(middleware.GatewayAPIKeyAuth(apiKeyService))
+	group.Use(middleware.RateLimit(cfg.RateLimiter, middleware.WithRateLimitRecorder(meteringService), middleware.WithRateLimitMetrics(cfg.Metrics)))
+	group.POST("/chat/completions", chatHandler.Create)
+}
+
+func registerPlatformRoutes(router *gin.Engine, cfg RouterConfig) {
+	adminTokenService := auth.NewAdminTokenService(cfg.Store.Queries, cfg.TokenHashSecret)
+	orgHandler := platform.NewOrgHandler(cfg.Store.Queries)
+	adminTokenHandler := platform.NewAdminTokenHandler(adminTokenService)
+
+	group := router.Group("/api/v1/platform")
+	group.Use(middleware.PlatformAuth(cfg.PlatformBootstrapToken))
+	group.POST("/orgs", orgHandler.Create)
+	group.POST("/orgs/:org_id/admin-tokens", adminTokenHandler.Create)
+}
+
+func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
+	adminTokenService := auth.NewAdminTokenService(cfg.Store.Queries, cfg.TokenHashSecret)
+	apiKeyService := auth.NewAPIKeyService(cfg.Store.Queries, cfg.TokenHashSecret)
+	providerService := provider.NewService(cfg.Store, cfg.SecretEncryptionKey)
+	routePolicyService := routing.NewService(cfg.Store)
+	budgetService := budget.NewService(cfg.Store.Queries)
+	meHandler := admin.NewMeHandler(cfg.Store.Queries)
+	apiKeyHandler := admin.NewAPIKeyHandler(apiKeyService)
+	providerHandler := admin.NewProviderHandler(providerService)
+	modelHandler := admin.NewModelHandler(providerService)
+	routePolicyHandler := admin.NewRoutePolicyHandler(routePolicyService)
+	budgetHandler := admin.NewBudgetHandler(budgetService)
+	requestLogHandler := admin.NewRequestLogHandler(cfg.Store.Queries)
+	usageHandler := admin.NewUsageHandler(cfg.Store.Queries)
+
+	group := router.Group("/api/v1/admin")
+	group.Use(middleware.AdminTokenAuth(adminTokenService))
+	group.GET("/me", meHandler.Get)
+	group.POST("/api-keys", apiKeyHandler.Create)
+	group.GET("/api-keys", apiKeyHandler.List)
+	group.POST("/api-keys/:api_key_id/revoke", apiKeyHandler.Revoke)
+	group.POST("/providers", providerHandler.Create)
+	group.GET("/providers", providerHandler.List)
+	group.POST("/models", modelHandler.Create)
+	group.GET("/models", modelHandler.List)
+	group.POST("/route-policies", routePolicyHandler.Create)
+	group.GET("/route-policies", routePolicyHandler.List)
+	group.POST("/budgets", budgetHandler.Create)
+	group.GET("/budgets", budgetHandler.List)
+	group.GET("/budgets/status", budgetHandler.Status)
+	group.GET("/request-logs", requestLogHandler.List)
+	group.GET("/usage/summary", usageHandler.Summary)
 }
 
 func ginMode(appEnv string) string {

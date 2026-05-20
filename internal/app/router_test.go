@@ -26,11 +26,8 @@ func TestNewSetsGinModeFromEnvironment(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			gin.SetMode(gin.DebugMode)
 
-			_ = New(Config{
-				AppEnv:      tt.env,
-				ServerPort:  8080,
-				DatabaseURL: "postgres://llmgw:llmgw@localhost:5432/llmgw?sslmode=disable",
-				RedisURL:    "redis://localhost:6379/0",
+			_ = NewRouter(RouterConfig{
+				AppEnv: tt.env,
 			}, zap.NewNop())
 
 			if got := gin.Mode(); got != tt.want {

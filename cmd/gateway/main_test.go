@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 func TestRunShutsDownWhenContextIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	gateway := newFakeGateway()
 
 	cfg := config.Config{
 		AppEnv:                 "test",
@@ -25,10 +28,16 @@ func TestRunShutsDownWhenContextIsCancelled(t *testing.T) {
 	}
 
 	go func() {
-		done <- run(ctx, cfg, zap.NewNop())
+		done <- runWithFactory(ctx, cfg, zap.NewNop(), func(context.Context, config.Config, *zap.Logger) (gatewayServer, error) {
+			return gateway, nil
+		})
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-gateway.runStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("gateway Run was not called")
+	}
 	cancel()
 
 	select {
@@ -39,4 +48,36 @@ func TestRunShutsDownWhenContextIsCancelled(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("run did not shut down after context cancellation")
 	}
+
+	select {
+	case <-gateway.shutdownCalled:
+	default:
+		t.Fatal("gateway Shutdown was not called")
+	}
+}
+
+type fakeGateway struct {
+	runStarted     chan struct{}
+	shutdownCalled chan struct{}
+	once           sync.Once
+}
+
+func newFakeGateway() *fakeGateway {
+	return &fakeGateway{
+		runStarted:     make(chan struct{}),
+		shutdownCalled: make(chan struct{}),
+	}
+}
+
+func (g *fakeGateway) Run() error {
+	close(g.runStarted)
+	<-g.shutdownCalled
+	return http.ErrServerClosed
+}
+
+func (g *fakeGateway) Shutdown(context.Context) error {
+	g.once.Do(func() {
+		close(g.shutdownCalled)
+	})
+	return nil
 }

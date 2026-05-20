@@ -38,7 +38,23 @@ func main() {
 }
 
 func run(ctx context.Context, cfg config.Config, logger *zap.Logger) error {
-	gateway := app.New(cfg, logger)
+	return runWithFactory(ctx, cfg, logger, func(ctx context.Context, cfg config.Config, logger *zap.Logger) (gatewayServer, error) {
+		return app.New(ctx, cfg, logger)
+	})
+}
+
+type gatewayServer interface {
+	Run() error
+	Shutdown(ctx context.Context) error
+}
+
+type gatewayFactory func(ctx context.Context, cfg config.Config, logger *zap.Logger) (gatewayServer, error)
+
+func runWithFactory(ctx context.Context, cfg config.Config, logger *zap.Logger, factory gatewayFactory) error {
+	gateway, err := factory(ctx, cfg, logger)
+	if err != nil {
+		return err
+	}
 
 	serverErr := make(chan error, 1)
 	go func() {

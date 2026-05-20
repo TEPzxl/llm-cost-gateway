@@ -36,6 +36,12 @@ Verify migration tenant and value constraints:
 make verify-migration
 ```
 
+Generate sqlc query code:
+
+```bash
+make sqlc-generate
+```
+
 Rollback all local migrations:
 
 ```bash
