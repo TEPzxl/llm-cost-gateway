@@ -11,4 +11,5 @@ dist/
 out/
 *.tsbuildinfo
 .env
+.demo.env
 coverage/
