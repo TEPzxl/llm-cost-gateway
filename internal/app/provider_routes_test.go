@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	secretcrypto "github.com/tep/llm-cost-gateway/internal/crypto"
+	"github.com/tep/llm-cost-gateway/internal/domain"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 )
 
@@ -106,6 +107,96 @@ func TestAdminProviderRoutesRejectInvalidOpenAIProvider(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("POST /api/v1/admin/providers status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAdminProviderHealthRoutesCheckMockAndList(t *testing.T) {
+	router, _ := newTask5TestRouter(t)
+	orgID := createOrgViaHTTP(t, router, "Provider Health Org", "provider-health-org")
+	adminToken := createAdminTokenViaHTTP(t, router, orgID)
+	provider := createProviderViaHTTP(t, router, adminToken.Token, createProviderRequest{
+		Name:      "mock-health-provider",
+		Type:      "mock",
+		TimeoutMS: 30000,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/providers/"+provider.ID.String()+"/health-check", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken.Token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST provider health status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var checked providerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &checked); err != nil {
+		t.Fatalf("decode provider health response: %v", err)
+	}
+	if checked.LastHealthStatus == nil || *checked.LastHealthStatus != "healthy" {
+		t.Fatalf("last_health_status = %v, want healthy", checked.LastHealthStatus)
+	}
+	if checked.LastHealthCheckedAt == nil {
+		t.Fatal("last_health_checked_at is nil, want timestamp")
+	}
+	if checked.LastErrorCode != nil || checked.LastErrorMessage != nil {
+		t.Fatalf("health errors = %v %v, want nil", checked.LastErrorCode, checked.LastErrorMessage)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/providers/health", nil)
+	listReq.Header.Set("Authorization", "Bearer "+adminToken.Token)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("GET provider health status = %d, want %d; body=%s", listRec.Code, http.StatusOK, listRec.Body.String())
+	}
+	var listBody struct {
+		Items []providerResponse `json:"items"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listBody); err != nil {
+		t.Fatalf("decode provider health list: %v", err)
+	}
+	if len(listBody.Items) != 1 || listBody.Items[0].LastHealthStatus == nil || *listBody.Items[0].LastHealthStatus != "healthy" {
+		t.Fatalf("provider health list = %+v, want one healthy provider", listBody.Items)
+	}
+}
+
+func TestAdminProviderHealthRoutesOpenAICompatibleFailure(t *testing.T) {
+	router, _ := newTask5TestRouter(t)
+	orgID := createOrgViaHTTP(t, router, "Provider Health Failure Org", "provider-health-failure-org")
+	adminToken := createAdminTokenViaHTTP(t, router, orgID)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	provider := createProviderViaHTTP(t, router, adminToken.Token, createProviderRequest{
+		Name:      "openai-health-provider",
+		Type:      "openai_compatible",
+		BaseURL:   stringPtr(server.URL + "/v1"),
+		APIKey:    stringPtr("provider-secret-key"),
+		TimeoutMS: 1000,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/providers/"+provider.ID.String()+"/health-check", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken.Token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST provider health status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var checked providerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &checked); err != nil {
+		t.Fatalf("decode provider health response: %v", err)
+	}
+	if checked.LastHealthStatus == nil || *checked.LastHealthStatus != "unhealthy" {
+		t.Fatalf("last_health_status = %v, want unhealthy", checked.LastHealthStatus)
+	}
+	if checked.LastErrorCode == nil || *checked.LastErrorCode != domain.CodeProviderUnavailable {
+		t.Fatalf("last_error_code = %v, want %s", checked.LastErrorCode, domain.CodeProviderUnavailable)
+	}
+	if checked.LastErrorMessage == nil || !strings.Contains(*checked.LastErrorMessage, "status 500") {
+		t.Fatalf("last_error_message = %v, want status 500", checked.LastErrorMessage)
 	}
 }
 
@@ -211,14 +302,18 @@ type createProviderRequest struct {
 }
 
 type providerResponse struct {
-	ID        uuid.UUID `json:"id"`
-	Name      string    `json:"name"`
-	Type      string    `json:"type"`
-	BaseURL   *string   `json:"base_url"`
-	APIKey    *string   `json:"api_key"`
-	Status    string    `json:"status"`
-	TimeoutMS int32     `json:"timeout_ms"`
-	CreatedAt time.Time `json:"created_at"`
+	ID                  uuid.UUID  `json:"id"`
+	Name                string     `json:"name"`
+	Type                string     `json:"type"`
+	BaseURL             *string    `json:"base_url"`
+	APIKey              *string    `json:"api_key"`
+	Status              string     `json:"status"`
+	TimeoutMS           int32      `json:"timeout_ms"`
+	LastHealthStatus    *string    `json:"last_health_status"`
+	LastHealthCheckedAt *time.Time `json:"last_health_checked_at"`
+	LastErrorCode       *string    `json:"last_error_code"`
+	LastErrorMessage    *string    `json:"last_error_message"`
+	CreatedAt           time.Time  `json:"created_at"`
 }
 
 type createModelRequest struct {

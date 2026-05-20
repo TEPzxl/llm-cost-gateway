@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	httpapi "github.com/tep/llm-cost-gateway/internal/http"
 	"github.com/tep/llm-cost-gateway/internal/http/middleware"
 	"github.com/tep/llm-cost-gateway/internal/provider"
@@ -30,13 +31,17 @@ type createProviderRequest struct {
 }
 
 type providerResponse struct {
-	ID        uuid.UUID `json:"id"`
-	Name      string    `json:"name"`
-	Type      string    `json:"type"`
-	BaseURL   *string   `json:"base_url"`
-	Status    string    `json:"status"`
-	TimeoutMS int32     `json:"timeout_ms"`
-	CreatedAt time.Time `json:"created_at"`
+	ID                  uuid.UUID  `json:"id"`
+	Name                string     `json:"name"`
+	Type                string     `json:"type"`
+	BaseURL             *string    `json:"base_url"`
+	Status              string     `json:"status"`
+	TimeoutMS           int32      `json:"timeout_ms"`
+	LastHealthStatus    *string    `json:"last_health_status"`
+	LastHealthCheckedAt *time.Time `json:"last_health_checked_at"`
+	LastErrorCode       *string    `json:"last_error_code"`
+	LastErrorMessage    *string    `json:"last_error_message"`
+	CreatedAt           time.Time  `json:"created_at"`
 }
 
 type listProvidersResponse struct {
@@ -99,14 +104,25 @@ func newProviderResponse(item db.Provider) providerResponse {
 	}
 
 	return providerResponse{
-		ID:        item.ID,
-		Name:      item.Name,
-		Type:      item.Type,
-		BaseURL:   baseURL,
-		Status:    item.Status,
-		TimeoutMS: item.TimeoutMs,
-		CreatedAt: item.CreatedAt,
+		ID:                  item.ID,
+		Name:                item.Name,
+		Type:                item.Type,
+		BaseURL:             baseURL,
+		Status:              item.Status,
+		TimeoutMS:           item.TimeoutMs,
+		LastHealthStatus:    pgTextPtr(item.LastHealthStatus),
+		LastHealthCheckedAt: item.LastHealthCheckedAt,
+		LastErrorCode:       pgTextPtr(item.LastErrorCode),
+		LastErrorMessage:    pgTextPtr(item.LastErrorMessage),
+		CreatedAt:           item.CreatedAt,
 	}
+}
+
+func pgTextPtr(value pgtype.Text) *string {
+	if !value.Valid {
+		return nil
+	}
+	return &value.String
 }
 
 func respondProviderServiceError(c *gin.Context, err error) {
