@@ -257,15 +257,16 @@ func createMeteringFixture(t *testing.T, ctx context.Context, st *store.Store) m
 		t.Fatalf("CreateOrganization returned error: %v", err)
 	}
 	apiKey, err := st.Queries.CreateAPIKey(ctx, db.CreateAPIKeyParams{
-		ID:        uuid.New(),
-		OrgID:     org.ID,
-		Name:      "metering-key",
-		KeyPrefix: "llmgw_live_test",
-		KeyHash:   "metering-key-hash-" + uuid.NewString(),
-		Scopes:    []string{"chat.completions"},
-		Status:    "active",
-		RpmLimit:  60,
-		CreatedAt: now,
+		ID:          uuid.New(),
+		OrgID:       org.ID,
+		Name:        "metering-key",
+		KeyPrefix:   "llmgw_live_test",
+		KeyHash:     "metering-key-hash-" + uuid.NewString(),
+		Scopes:      []string{"chat.completions"},
+		Status:      "active",
+		RpmLimit:    60,
+		QuotaAction: "block",
+		CreatedAt:   now,
 	})
 	if err != nil {
 		t.Fatalf("CreateAPIKey returned error: %v", err)

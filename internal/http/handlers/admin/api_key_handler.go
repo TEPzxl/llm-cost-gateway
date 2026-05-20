@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/tep/llm-cost-gateway/internal/auth"
 	httpapi "github.com/tep/llm-cost-gateway/internal/http"
 	"github.com/tep/llm-cost-gateway/internal/http/middleware"
@@ -23,31 +24,40 @@ func NewAPIKeyHandler(service *auth.APIKeyService) *APIKeyHandler {
 }
 
 type createAPIKeyRequest struct {
-	Name      string     `json:"name"`
-	Scopes    []string   `json:"scopes"`
-	RPMLimit  int32      `json:"rpm_limit"`
-	ExpiresAt *time.Time `json:"expires_at"`
+	Name                     string     `json:"name"`
+	Scopes                   []string   `json:"scopes"`
+	RPMLimit                 int32      `json:"rpm_limit"`
+	DailyCostLimitMicroUSD   *int64     `json:"daily_cost_limit_micro_usd"`
+	MonthlyCostLimitMicroUSD *int64     `json:"monthly_cost_limit_micro_usd"`
+	QuotaAction              string     `json:"quota_action"`
+	ExpiresAt                *time.Time `json:"expires_at"`
 }
 
 type createAPIKeyResponse struct {
-	ID        uuid.UUID `json:"id"`
-	Name      string    `json:"name"`
-	Key       string    `json:"key"`
-	KeyPrefix string    `json:"key_prefix"`
-	Status    string    `json:"status"`
-	RPMLimit  int32     `json:"rpm_limit"`
-	CreatedAt time.Time `json:"created_at"`
+	ID                       uuid.UUID `json:"id"`
+	Name                     string    `json:"name"`
+	Key                      string    `json:"key"`
+	KeyPrefix                string    `json:"key_prefix"`
+	Status                   string    `json:"status"`
+	RPMLimit                 int32     `json:"rpm_limit"`
+	DailyCostLimitMicroUSD   *int64    `json:"daily_cost_limit_micro_usd"`
+	MonthlyCostLimitMicroUSD *int64    `json:"monthly_cost_limit_micro_usd"`
+	QuotaAction              string    `json:"quota_action"`
+	CreatedAt                time.Time `json:"created_at"`
 }
 
 type apiKeyResponse struct {
-	ID         uuid.UUID  `json:"id"`
-	Name       string     `json:"name"`
-	KeyPrefix  string     `json:"key_prefix"`
-	Status     string     `json:"status"`
-	RPMLimit   int32      `json:"rpm_limit"`
-	ExpiresAt  *time.Time `json:"expires_at"`
-	LastUsedAt *time.Time `json:"last_used_at"`
-	CreatedAt  time.Time  `json:"created_at"`
+	ID                       uuid.UUID  `json:"id"`
+	Name                     string     `json:"name"`
+	KeyPrefix                string     `json:"key_prefix"`
+	Status                   string     `json:"status"`
+	RPMLimit                 int32      `json:"rpm_limit"`
+	DailyCostLimitMicroUSD   *int64     `json:"daily_cost_limit_micro_usd"`
+	MonthlyCostLimitMicroUSD *int64     `json:"monthly_cost_limit_micro_usd"`
+	QuotaAction              string     `json:"quota_action"`
+	ExpiresAt                *time.Time `json:"expires_at"`
+	LastUsedAt               *time.Time `json:"last_used_at"`
+	CreatedAt                time.Time  `json:"created_at"`
 }
 
 type listAPIKeysResponse struct {
@@ -74,13 +84,28 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 		httpapi.RespondError(c, httpapi.InvalidRequest("rpm_limit must be greater than zero"))
 		return
 	}
+	if request.DailyCostLimitMicroUSD != nil && *request.DailyCostLimitMicroUSD < 0 {
+		httpapi.RespondError(c, httpapi.InvalidRequest("daily_cost_limit_micro_usd must be non-negative"))
+		return
+	}
+	if request.MonthlyCostLimitMicroUSD != nil && *request.MonthlyCostLimitMicroUSD < 0 {
+		httpapi.RespondError(c, httpapi.InvalidRequest("monthly_cost_limit_micro_usd must be non-negative"))
+		return
+	}
+	if request.QuotaAction != "" && request.QuotaAction != auth.QuotaActionWarn && request.QuotaAction != auth.QuotaActionBlock {
+		httpapi.RespondError(c, httpapi.InvalidRequest("quota_action must be warn or block"))
+		return
+	}
 
 	created, err := h.service.CreateAPIKey(c.Request.Context(), auth.CreateAPIKeyParams{
-		OrgID:     principal.OrgID,
-		Name:      request.Name,
-		Scopes:    request.Scopes,
-		RPMLimit:  request.RPMLimit,
-		ExpiresAt: request.ExpiresAt,
+		OrgID:                    principal.OrgID,
+		Name:                     request.Name,
+		Scopes:                   request.Scopes,
+		RPMLimit:                 request.RPMLimit,
+		DailyCostLimitMicroUSD:   request.DailyCostLimitMicroUSD,
+		MonthlyCostLimitMicroUSD: request.MonthlyCostLimitMicroUSD,
+		QuotaAction:              request.QuotaAction,
+		ExpiresAt:                request.ExpiresAt,
 	})
 	if err != nil {
 		httpapi.RespondError(c, httpapi.InternalError("internal server error"))
@@ -88,13 +113,16 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 	}
 
 	httpapi.RespondJSON(c, http.StatusCreated, createAPIKeyResponse{
-		ID:        created.APIKey.ID,
-		Name:      created.APIKey.Name,
-		Key:       created.Key,
-		KeyPrefix: created.APIKey.KeyPrefix,
-		Status:    created.APIKey.Status,
-		RPMLimit:  created.APIKey.RpmLimit,
-		CreatedAt: created.APIKey.CreatedAt,
+		ID:                       created.APIKey.ID,
+		Name:                     created.APIKey.Name,
+		Key:                      created.Key,
+		KeyPrefix:                created.APIKey.KeyPrefix,
+		Status:                   created.APIKey.Status,
+		RPMLimit:                 created.APIKey.RpmLimit,
+		DailyCostLimitMicroUSD:   pgInt8Ptr(created.APIKey.DailyCostLimitMicroUsd),
+		MonthlyCostLimitMicroUSD: pgInt8Ptr(created.APIKey.MonthlyCostLimitMicroUsd),
+		QuotaAction:              created.APIKey.QuotaAction,
+		CreatedAt:                created.APIKey.CreatedAt,
 	})
 }
 
@@ -146,13 +174,24 @@ func (h *APIKeyHandler) Revoke(c *gin.Context) {
 
 func newAPIKeyResponse(apiKey db.ApiKey) apiKeyResponse {
 	return apiKeyResponse{
-		ID:         apiKey.ID,
-		Name:       apiKey.Name,
-		KeyPrefix:  apiKey.KeyPrefix,
-		Status:     apiKey.Status,
-		RPMLimit:   apiKey.RpmLimit,
-		ExpiresAt:  apiKey.ExpiresAt,
-		LastUsedAt: apiKey.LastUsedAt,
-		CreatedAt:  apiKey.CreatedAt,
+		ID:                       apiKey.ID,
+		Name:                     apiKey.Name,
+		KeyPrefix:                apiKey.KeyPrefix,
+		Status:                   apiKey.Status,
+		RPMLimit:                 apiKey.RpmLimit,
+		DailyCostLimitMicroUSD:   pgInt8Ptr(apiKey.DailyCostLimitMicroUsd),
+		MonthlyCostLimitMicroUSD: pgInt8Ptr(apiKey.MonthlyCostLimitMicroUsd),
+		QuotaAction:              apiKey.QuotaAction,
+		ExpiresAt:                apiKey.ExpiresAt,
+		LastUsedAt:               apiKey.LastUsedAt,
+		CreatedAt:                apiKey.CreatedAt,
 	}
+}
+
+func pgInt8Ptr(value pgtype.Int8) *int64 {
+	if !value.Valid {
+		return nil
+	}
+	result := value.Int64
+	return &result
 }

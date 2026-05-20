@@ -10,6 +10,9 @@ export type APIKey = {
   key_prefix: string;
   status: string;
   rpm_limit: number;
+  daily_cost_limit_micro_usd?: number | null;
+  monthly_cost_limit_micro_usd?: number | null;
+  quota_action: "warn" | "block" | string;
   expires_at?: string | null;
   last_used_at?: string | null;
   created_at: string;
@@ -19,6 +22,9 @@ export type CreateAPIKeyRequest = {
   name: string;
   scopes: string[];
   rpm_limit: number;
+  daily_cost_limit_micro_usd?: number | null;
+  monthly_cost_limit_micro_usd?: number | null;
+  quota_action: "warn" | "block";
   expires_at?: string | null;
 };
 

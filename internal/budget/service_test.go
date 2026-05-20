@@ -222,15 +222,16 @@ func createBudgetCostFixture(t *testing.T, ctx context.Context, st *store.Store,
 
 	now := time.Now().UTC()
 	apiKey, err := st.Queries.CreateAPIKey(ctx, db.CreateAPIKeyParams{
-		ID:        uuid.New(),
-		OrgID:     orgID,
-		Name:      "budget-key",
-		KeyPrefix: "llmgw_live_test",
-		KeyHash:   "budget-key-hash-" + uuid.NewString(),
-		Scopes:    []string{"chat.completions"},
-		Status:    "active",
-		RpmLimit:  60,
-		CreatedAt: now,
+		ID:          uuid.New(),
+		OrgID:       orgID,
+		Name:        "budget-key",
+		KeyPrefix:   "llmgw_live_test",
+		KeyHash:     "budget-key-hash-" + uuid.NewString(),
+		Scopes:      []string{"chat.completions"},
+		Status:      "active",
+		RpmLimit:    60,
+		QuotaAction: "block",
+		CreatedAt:   now,
 	})
 	if err != nil {
 		t.Fatalf("CreateAPIKey returned error: %v", err)

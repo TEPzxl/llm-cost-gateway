@@ -20,9 +20,12 @@ func TestAdminAPIKeyRoutesCreateListAndRevokeKey(t *testing.T) {
 	adminToken := createAdminTokenViaHTTP(t, router, orgID)
 
 	created := createAPIKeyViaHTTP(t, router, adminToken.Token, createAPIKeyRequest{
-		Name:     "docs-assistant-prod",
-		Scopes:   []string{"chat.completions"},
-		RPMLimit: 60,
+		Name:                     "docs-assistant-prod",
+		Scopes:                   []string{"chat.completions"},
+		RPMLimit:                 60,
+		DailyCostLimitMicroUSD:   int64Ptr(1000),
+		MonthlyCostLimitMicroUSD: int64Ptr(10_000),
+		QuotaAction:              "warn",
 	})
 	if !strings.HasPrefix(created.Key, "llmgw_live_") {
 		t.Fatalf("api key = %q, want llmgw_live_ prefix", created.Key)
@@ -40,6 +43,15 @@ func TestAdminAPIKeyRoutesCreateListAndRevokeKey(t *testing.T) {
 	}
 	if stored.OrgID != orgID {
 		t.Fatalf("stored org id = %s, want %s", stored.OrgID, orgID)
+	}
+	if !stored.DailyCostLimitMicroUsd.Valid || stored.DailyCostLimitMicroUsd.Int64 != 1000 {
+		t.Fatalf("stored daily limit = %+v, want 1000", stored.DailyCostLimitMicroUsd)
+	}
+	if !stored.MonthlyCostLimitMicroUsd.Valid || stored.MonthlyCostLimitMicroUsd.Int64 != 10_000 {
+		t.Fatalf("stored monthly limit = %+v, want 10000", stored.MonthlyCostLimitMicroUsd)
+	}
+	if stored.QuotaAction != "warn" {
+		t.Fatalf("stored quota action = %q, want warn", stored.QuotaAction)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/api-keys", nil)
@@ -63,6 +75,15 @@ func TestAdminAPIKeyRoutesCreateListAndRevokeKey(t *testing.T) {
 	}
 	if items[0]["key_prefix"] != created.KeyPrefix {
 		t.Fatalf("listed key_prefix = %v, want %s", items[0]["key_prefix"], created.KeyPrefix)
+	}
+	if items[0]["daily_cost_limit_micro_usd"] != float64(1000) {
+		t.Fatalf("listed daily limit = %v, want 1000", items[0]["daily_cost_limit_micro_usd"])
+	}
+	if items[0]["monthly_cost_limit_micro_usd"] != float64(10_000) {
+		t.Fatalf("listed monthly limit = %v, want 10000", items[0]["monthly_cost_limit_micro_usd"])
+	}
+	if items[0]["quota_action"] != "warn" {
+		t.Fatalf("listed quota_action = %v, want warn", items[0]["quota_action"])
 	}
 
 	revoked := revokeAPIKeyViaHTTP(t, router, adminToken.Token, created.ID, http.StatusOK)
@@ -108,32 +129,76 @@ func TestAdminAPIKeyRoutesRejectInvalidRPM(t *testing.T) {
 	}
 }
 
+func TestAdminAPIKeyRoutesRejectInvalidQuota(t *testing.T) {
+	router, _ := newTask5TestRouter(t)
+	orgID := createOrgViaHTTP(t, router, "Invalid Quota Org", "invalid-quota-org")
+	adminToken := createAdminTokenViaHTTP(t, router, orgID)
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "negative daily limit",
+			body: `{"name":"bad-key","scopes":["chat.completions"],"rpm_limit":60,"daily_cost_limit_micro_usd":-1}`,
+		},
+		{
+			name: "invalid action",
+			body: `{"name":"bad-key","scopes":["chat.completions"],"rpm_limit":60,"quota_action":"drop"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/api-keys", strings.NewReader(tt.body))
+			req.Header.Set("Authorization", "Bearer "+adminToken.Token)
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("POST /api/v1/admin/api-keys status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+		})
+	}
+}
+
 type createAPIKeyRequest struct {
-	Name      string     `json:"name"`
-	Scopes    []string   `json:"scopes"`
-	RPMLimit  int32      `json:"rpm_limit"`
-	ExpiresAt *time.Time `json:"expires_at"`
+	Name                     string     `json:"name"`
+	Scopes                   []string   `json:"scopes"`
+	RPMLimit                 int32      `json:"rpm_limit"`
+	DailyCostLimitMicroUSD   *int64     `json:"daily_cost_limit_micro_usd"`
+	MonthlyCostLimitMicroUSD *int64     `json:"monthly_cost_limit_micro_usd"`
+	QuotaAction              string     `json:"quota_action"`
+	ExpiresAt                *time.Time `json:"expires_at"`
 }
 
 type apiKeyCreateResponse struct {
-	ID        uuid.UUID `json:"id"`
-	Name      string    `json:"name"`
-	Key       string    `json:"key"`
-	KeyPrefix string    `json:"key_prefix"`
-	Status    string    `json:"status"`
-	RPMLimit  int32     `json:"rpm_limit"`
-	CreatedAt time.Time `json:"created_at"`
+	ID                       uuid.UUID `json:"id"`
+	Name                     string    `json:"name"`
+	Key                      string    `json:"key"`
+	KeyPrefix                string    `json:"key_prefix"`
+	Status                   string    `json:"status"`
+	RPMLimit                 int32     `json:"rpm_limit"`
+	DailyCostLimitMicroUSD   *int64    `json:"daily_cost_limit_micro_usd"`
+	MonthlyCostLimitMicroUSD *int64    `json:"monthly_cost_limit_micro_usd"`
+	QuotaAction              string    `json:"quota_action"`
+	CreatedAt                time.Time `json:"created_at"`
 }
 
 type apiKeyResponse struct {
-	ID         uuid.UUID  `json:"id"`
-	Name       string     `json:"name"`
-	KeyPrefix  string     `json:"key_prefix"`
-	Status     string     `json:"status"`
-	RPMLimit   int32      `json:"rpm_limit"`
-	ExpiresAt  *time.Time `json:"expires_at"`
-	LastUsedAt *time.Time `json:"last_used_at"`
-	CreatedAt  time.Time  `json:"created_at"`
+	ID                       uuid.UUID  `json:"id"`
+	Name                     string     `json:"name"`
+	KeyPrefix                string     `json:"key_prefix"`
+	Status                   string     `json:"status"`
+	RPMLimit                 int32      `json:"rpm_limit"`
+	DailyCostLimitMicroUSD   *int64     `json:"daily_cost_limit_micro_usd"`
+	MonthlyCostLimitMicroUSD *int64     `json:"monthly_cost_limit_micro_usd"`
+	QuotaAction              string     `json:"quota_action"`
+	ExpiresAt                *time.Time `json:"expires_at"`
+	LastUsedAt               *time.Time `json:"last_used_at"`
+	CreatedAt                time.Time  `json:"created_at"`
 }
 
 func createAPIKeyViaHTTP(t *testing.T, router http.Handler, adminToken string, body createAPIKeyRequest) apiKeyCreateResponse {
@@ -186,4 +251,8 @@ func revokeAPIKeyViaHTTP(t *testing.T, router http.Handler, adminToken string, a
 		t.Fatalf("decode revoke api key response: %v", err)
 	}
 	return response
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
 }

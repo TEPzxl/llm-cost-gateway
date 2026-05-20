@@ -57,29 +57,31 @@ func TestAPIKeyQueriesAreScopedByOrg(t *testing.T) {
 	orgB := createTestOrganization(t, ctx, st, "api-key-org-b")
 
 	keyA, err := st.Queries.CreateAPIKey(ctx, db.CreateAPIKeyParams{
-		ID:        uuid.New(),
-		OrgID:     orgA.ID,
-		Name:      "key-a",
-		KeyPrefix: "llmgw_live_a",
-		KeyHash:   "hash-a",
-		Scopes:    []string{"chat.completions"},
-		Status:    "active",
-		RpmLimit:  60,
-		CreatedAt: time.Now().UTC(),
+		ID:          uuid.New(),
+		OrgID:       orgA.ID,
+		Name:        "key-a",
+		KeyPrefix:   "llmgw_live_a",
+		KeyHash:     "hash-a",
+		Scopes:      []string{"chat.completions"},
+		Status:      "active",
+		RpmLimit:    60,
+		QuotaAction: "block",
+		CreatedAt:   time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatalf("CreateAPIKey org A returned error: %v", err)
 	}
 	_, err = st.Queries.CreateAPIKey(ctx, db.CreateAPIKeyParams{
-		ID:        uuid.New(),
-		OrgID:     orgB.ID,
-		Name:      "key-b",
-		KeyPrefix: "llmgw_live_b",
-		KeyHash:   "hash-b",
-		Scopes:    []string{"chat.completions"},
-		Status:    "active",
-		RpmLimit:  60,
-		CreatedAt: time.Now().UTC(),
+		ID:          uuid.New(),
+		OrgID:       orgB.ID,
+		Name:        "key-b",
+		KeyPrefix:   "llmgw_live_b",
+		KeyHash:     "hash-b",
+		Scopes:      []string{"chat.completions"},
+		Status:      "active",
+		RpmLimit:    60,
+		QuotaAction: "block",
+		CreatedAt:   time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatalf("CreateAPIKey org B returned error: %v", err)
