@@ -2,8 +2,11 @@ import type {
   APIKey,
   APIKeyCreateResponse,
   Budget,
+  BudgetAlert,
+  BudgetAlertDelivery,
   BudgetStatus,
   CreateAPIKeyRequest,
+  CreateBudgetAlertRequest,
   CreateBudgetRequest,
   CreateModelRequest,
   CreateProviderRequest,
@@ -104,6 +107,17 @@ export function createApiClient(options: ApiClientOptions) {
       }),
     budgetStatus: () =>
       request<ListResponse<BudgetStatus>>("/api/v1/admin/budgets/status"),
+    listBudgetAlerts: () =>
+      request<ListResponse<BudgetAlert>>("/api/v1/admin/budget-alerts"),
+    createBudgetAlert: (body: CreateBudgetAlertRequest) =>
+      request<BudgetAlert>("/api/v1/admin/budget-alerts", {
+        method: "POST",
+        body: JSON.stringify(body)
+      }),
+    listBudgetAlertDeliveries: () =>
+      request<ListResponse<BudgetAlertDelivery>>(
+        "/api/v1/admin/budget-alert-deliveries"
+      ),
     listRequestLogs: (query = "") =>
       request<RequestLogsResponse>(`/api/v1/admin/request-logs${query}`),
     usageSummary: (query = "") =>

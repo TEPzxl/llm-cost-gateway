@@ -121,6 +121,38 @@ export type BudgetStatus = {
   action: "warn" | "block";
 };
 
+export type BudgetAlert = {
+  id: ID;
+  budget_id: ID;
+  webhook_url: string;
+  status: "active" | "disabled" | string;
+  created_at: string;
+};
+
+export type CreateBudgetAlertRequest = {
+  budget_id: ID;
+  webhook_url: string;
+  webhook_secret?: string;
+  status: "active" | "disabled";
+};
+
+export type BudgetAlertDelivery = {
+  id: ID;
+  budget_alert_id: ID;
+  budget_id: ID;
+  threshold: number;
+  period: "daily" | "monthly" | string;
+  period_window_start: string;
+  period_window_end: string;
+  used_micro_usd: number;
+  limit_micro_usd: number;
+  webhook_url: string;
+  status: "success" | "failed" | string;
+  http_status?: number | null;
+  error_message?: string | null;
+  created_at: string;
+};
+
 export type RequestLog = {
   id: ID;
   api_key_id?: ID | null;

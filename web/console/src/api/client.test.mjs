@@ -79,3 +79,36 @@ test("posts provider health check request", async () => {
   assert.equal(calls[0].init.method, "POST");
   assert.equal(checked.last_health_status, "healthy");
 });
+
+test("creates budget alert without exposing secret in response", async () => {
+  const calls = [];
+  const client = createApiClient({
+    baseUrl: "http://gateway.test",
+    getToken: () => "llmgw_admin_test",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return new Response(
+        JSON.stringify({
+          id: "00000000-0000-0000-0000-000000000011",
+          budget_id: "00000000-0000-0000-0000-000000000022",
+          webhook_url: "https://example.com/hook",
+          status: "active",
+          created_at: "2026-05-21T00:00:00Z"
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  });
+
+  const created = await client.createBudgetAlert({
+    budget_id: "00000000-0000-0000-0000-000000000022",
+    webhook_url: "https://example.com/hook",
+    webhook_secret: "secret",
+    status: "active"
+  });
+
+  assert.equal(calls[0].url, "http://gateway.test/api/v1/admin/budget-alerts");
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(created.webhook_url, "https://example.com/hook");
+  assert.equal("webhook_secret" in created, false);
+});

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createApiClient } from "../api/client";
 import { Layout, type ConsolePage } from "../components/Layout";
 import { APIKeysPage } from "../routes/APIKeysPage";
+import { BudgetAlertsPage } from "../routes/BudgetAlertsPage";
 import { BudgetsPage } from "../routes/BudgetsPage";
 import { DashboardPage } from "../routes/DashboardPage";
 import { LoginPage } from "../routes/LoginPage";
@@ -51,6 +52,7 @@ export default function HomePage() {
       {activePage === "models" && <ModelsPage client={client} />}
       {activePage === "route-policies" && <RoutePoliciesPage client={client} />}
       {activePage === "budgets" && <BudgetsPage client={client} />}
+      {activePage === "budget-alerts" && <BudgetAlertsPage client={client} />}
       {activePage === "request-logs" && <RequestLogsPage client={client} />}
       {activePage === "usage-summary" && <UsageSummaryPage client={client} />}
     </Layout>
