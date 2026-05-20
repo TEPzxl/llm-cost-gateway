@@ -2,15 +2,53 @@
 
 SaaS multi-tenant LLM gateway and CostOps platform.
 
-Current implementation status: phase 1 task 1 skeleton.
+Current implementation status: phase 1 v0.1 SaaS MVP.
 
 ## Requirements
 
 - Go 1.22+
 - Node.js 22+
-- npm 11+
+- npm
+- Docker and Docker Compose
+- `curl`
+- `jq`
 
-## Backend
+## Quick Demo
+
+Start services, apply migrations, seed demo data, and run an end-to-end smoke test:
+
+```bash
+make up
+make migrate-up
+make seed-demo
+make smoke-test
+```
+
+`make seed-demo` writes local demo credentials to `.demo.env`. Use `DEMO_ADMIN_TOKEN` from that file to log in to the console.
+
+## Local Services
+
+| Service | URL |
+|---|---|
+| Gateway | `http://localhost:8080` |
+| Console | `http://localhost:3000` |
+| Prometheus | `http://localhost:9090` |
+| PostgreSQL | `localhost:5432` |
+| Redis | `localhost:6379` |
+
+Health check:
+
+```bash
+curl http://localhost:8080/healthz
+```
+
+Expected response:
+
+```json
+{"status":"ok"}
+```
+
+## Common Commands
 
 Start the local stack:
 
@@ -30,67 +68,110 @@ Run database migrations:
 make migrate-up
 ```
 
+Rollback local migrations:
+
+```bash
+make migrate-down
+```
+
 Verify migration tenant and value constraints:
 
 ```bash
 make verify-migration
 ```
 
-Generate sqlc query code:
+Seed demo resources:
 
 ```bash
-make sqlc-generate
+make seed-demo
 ```
 
-Rollback all local migrations:
+Run the smoke test:
 
 ```bash
-make migrate-down
+make smoke-test
 ```
 
-Run tests:
+Run backend tests:
 
 ```bash
 make test
 ```
 
-Start the gateway with the example config:
+Run full Go package tests:
 
 ```bash
-make run
+go test ./...
 ```
 
-Health check:
-
-```bash
-curl http://localhost:8080/healthz
-```
-
-Expected response:
-
-```json
-{"status":"ok"}
-```
-
-## Console
-
-Install dependencies:
-
-```bash
-make console-install
-```
-
-Build the placeholder management console:
+Build the management console:
 
 ```bash
 make console-build
 ```
 
-Start the Next.js development server:
+## Console
+
+The management console runs at:
+
+```text
+http://localhost:3000
+```
+
+Login with `DEMO_ADMIN_TOKEN` from `.demo.env`.
+
+Implemented pages:
+
+- Dashboard
+- API Keys
+- Providers
+- Models
+- Route Policies
+- Budgets
+- Request Logs
+- Usage Summary
+
+The console stores the Admin Token in `sessionStorage` for the current browser session and does not write it to `localStorage`.
+
+## Gateway API
+
+Use `DEMO_API_KEY` from `.demo.env`:
 
 ```bash
-cd web/console && npm run dev
+curl -sS http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $DEMO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "fast-chat",
+    "messages": [{"role": "user", "content": "hello"}],
+    "stream": false
+  }'
 ```
+
+The response includes usage and cost. Cost values use integer micro USD, not floating-point money.
+
+## Metrics
+
+Prometheus UI:
+
+```text
+http://localhost:9090
+```
+
+Gateway metrics endpoint:
+
+```bash
+curl http://localhost:8080/metrics
+```
+
+## Documentation
+
+- `docs/api.md`: implemented v0.1 API reference
+- `docs/operations.md`: local operations guide
+- `docs/demo.md`: phase 1 demo walkthrough
+- `docs/00_MASTER_SDD.md`: master software design document
+- `docs/01_PHASE_1_V0_1_SAAS_MVP.md`: phase 1 task plan
+- `docs/02_PHASE_2_V0_2_PRODUCTION_READY.md`: phase 2 task plan
 
 ## Configuration
 
@@ -108,13 +189,3 @@ Environment variables override config file values:
 - `LOG_LEVEL`
 
 `SECRET_ENCRYPTION_KEY` must be 32 bytes for AES-256.
-
-## Local Services
-
-Docker Compose starts:
-
-- PostgreSQL: `localhost:5432`
-- Redis: `localhost:6379`
-- Gateway: `http://localhost:8080`
-- Console: `http://localhost:3000`
-- Prometheus: `http://localhost:9090`

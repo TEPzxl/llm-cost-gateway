@@ -1,0 +1,144 @@
+# Operations Guide
+
+本文档记录本地开发和阶段 1 演示所需的常用操作。
+
+## Requirements
+
+- Go 1.22+
+- Node.js 22+
+- npm
+- Docker 与 Docker Compose
+- `curl`
+- `jq`
+
+## Local Stack
+
+启动本地依赖和服务：
+
+```bash
+make up
+```
+
+服务地址：
+
+| Service | URL |
+|---|---|
+| Gateway | `http://localhost:8080` |
+| Console | `http://localhost:3000` |
+| Prometheus | `http://localhost:9090` |
+| PostgreSQL | `localhost:5432` |
+| Redis | `localhost:6379` |
+
+停止服务：
+
+```bash
+make down
+```
+
+## Migrations
+
+应用迁移：
+
+```bash
+make migrate-up
+```
+
+回滚迁移：
+
+```bash
+make migrate-down
+```
+
+验证数据库租户约束和值约束：
+
+```bash
+make verify-migration
+```
+
+## Demo Data
+
+创建一套可演示的租户、Admin Token、Gateway API Key、Mock Provider、Model、RoutePolicy 和 Budget：
+
+```bash
+make seed-demo
+```
+
+脚本会写入本地 `.demo.env`，其中包含一次性返回的明文 Admin Token 和 Gateway API Key。该文件已被 `.gitignore` 忽略，不应提交。
+
+可覆盖的环境变量：
+
+| Variable | Default |
+|---|---|
+| `GATEWAY_URL` | `http://localhost:8080` |
+| `PLATFORM_BOOTSTRAP_TOKEN` | `dev-bootstrap-token` |
+| `DEMO_ENV_FILE` | `.demo.env` |
+| `DEMO_SLUG` | `llmgw-demo-<timestamp>` |
+| `DEMO_MATCH_MODEL` | `fast-chat` |
+
+## Smoke Test
+
+运行端到端 smoke test：
+
+```bash
+make smoke-test
+```
+
+它会读取 `.demo.env`，完成：
+
+1. 使用 Gateway API Key 调用 `/v1/chat/completions`。
+2. 验证响应中的 `usage.total_tokens >= 0`。
+3. 验证响应中的 `cost.total_cost_micro >= 0`。
+4. 使用 Admin Token 查询 request logs。
+5. 使用 Admin Token 查询 usage summary。
+
+## Tests
+
+后端测试：
+
+```bash
+make test
+```
+
+全量 Go 测试：
+
+```bash
+go test ./...
+```
+
+管理后台 API client 测试：
+
+```bash
+cd web/console && npm test
+```
+
+管理后台生产构建：
+
+```bash
+make console-build
+```
+
+## Console
+
+Docker Compose 启动后，管理后台地址为：
+
+```text
+http://localhost:3000
+```
+
+登录时输入 `.demo.env` 中的 `DEMO_ADMIN_TOKEN`。前端使用 `sessionStorage` 保存当前会话 token，不写入 `localStorage`。
+
+## Metrics
+
+Prometheus UI：
+
+```text
+http://localhost:9090
+```
+
+Gateway metrics endpoint：
+
+```bash
+curl http://localhost:8080/metrics
+```
+
+Metrics label 不包含 request_id，也不包含 Prompt 或 Response 原文。
