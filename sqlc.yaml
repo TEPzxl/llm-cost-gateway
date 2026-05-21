@@ -13,6 +13,7 @@ sql:
       - db/migrations/000009_route_lowest_latency.up.sql
       - db/migrations/000010_cache_events.up.sql
       - db/migrations/000011_semantic_cache_events.up.sql
+      - db/migrations/000012_content_policies.up.sql
     queries: db/query
     gen:
       go:

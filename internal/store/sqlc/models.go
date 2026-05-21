@@ -111,6 +111,16 @@ type CacheEvent struct {
 	CreatedAt      time.Time        `db:"created_at" json:"created_at"`
 }
 
+type ContentPolicy struct {
+	ID        uuid.UUID `db:"id" json:"id"`
+	OrgID     uuid.UUID `db:"org_id" json:"org_id"`
+	Name      string    `db:"name" json:"name"`
+	PiiAction string    `db:"pii_action" json:"pii_action"`
+	Status    string    `db:"status" json:"status"`
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
+}
+
 type CostRecord struct {
 	ID               uuid.UUID       `db:"id" json:"id"`
 	UsageRecordID    uuid.UUID       `db:"usage_record_id" json:"usage_record_id"`
