@@ -180,7 +180,20 @@ export type AdminAuditLog = {
 export type CacheEvent = {
   id: ID;
   request_log_id?: ID | null;
-  event_type: "hit" | "miss" | "store" | "skip" | "read_error" | "write_error" | string;
+  event_type:
+    | "hit"
+    | "miss"
+    | "store"
+    | "skip"
+    | "read_error"
+    | "write_error"
+    | "semantic_hit"
+    | "semantic_miss"
+    | "semantic_skip"
+    | "semantic_store"
+    | "semantic_read_error"
+    | "semantic_write_error"
+    | string;
   requested_model: string;
   cache_key_hash: string;
   messages_hash: string;

@@ -54,6 +54,12 @@ export function CachePage({ client }: PageProps) {
               <option value="skip">skip</option>
               <option value="read_error">read_error</option>
               <option value="write_error">write_error</option>
+              <option value="semantic_hit">semantic_hit</option>
+              <option value="semantic_miss">semantic_miss</option>
+              <option value="semantic_skip">semantic_skip</option>
+              <option value="semantic_store">semantic_store</option>
+              <option value="semantic_read_error">semantic_read_error</option>
+              <option value="semantic_write_error">semantic_write_error</option>
             </select>
           </label>
           <label className="field">
