@@ -86,6 +86,12 @@ func TestLoadUsesDefaultsAndEnvironment(t *testing.T) {
 	if cfg.TracingServiceName != "llm-cost-gateway" {
 		t.Fatalf("TracingServiceName = %q, want llm-cost-gateway", cfg.TracingServiceName)
 	}
+	if cfg.PasswordlessEmailEnabled {
+		t.Fatal("PasswordlessEmailEnabled = true, want false")
+	}
+	if cfg.MagicLinkTTLSeconds != 900 {
+		t.Fatalf("MagicLinkTTLSeconds = %d, want 900", cfg.MagicLinkTTLSeconds)
+	}
 }
 
 func TestLoadReadsConfigFileAndEnvironmentOverrides(t *testing.T) {
@@ -109,6 +115,15 @@ func TestLoadReadsConfigFileAndEnvironmentOverrides(t *testing.T) {
 	t.Setenv("TRACING_OTLP_ENDPOINT", "https://otel.example.test:4318")
 	t.Setenv("TRACING_INSECURE", "false")
 	t.Setenv("TRACING_SERVICE_NAME", "env-gateway")
+	t.Setenv("AUTH_PASSWORDLESS_EMAIL_ENABLED", "true")
+	t.Setenv("AUTH_MAGIC_LINK_BASE_URL", "https://console.example.test/login")
+	t.Setenv("AUTH_MAGIC_LINK_TTL_SECONDS", "600")
+	t.Setenv("SMTP_HOST", "smtp.example.test")
+	t.Setenv("SMTP_PORT", "2525")
+	t.Setenv("SMTP_USERNAME", "env-smtp-user")
+	t.Setenv("SMTP_PASSWORD", "env-smtp-password")
+	t.Setenv("SMTP_FROM", "login@example.test")
+	t.Setenv("SMTP_TLS_MODE", "implicit")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	content := []byte(`
@@ -140,6 +155,15 @@ tracing_enabled: false
 tracing_otlp_endpoint: localhost:4318
 tracing_insecure: true
 tracing_service_name: file-gateway
+auth_passwordless_email_enabled: false
+auth_magic_link_base_url: https://file-console.example.test/login
+auth_magic_link_ttl_seconds: 900
+smtp_host: file-smtp.example.test
+smtp_port: 587
+smtp_username: file_user
+smtp_password: file_password
+smtp_from: file-login@example.test
+smtp_tls_mode: starttls
 `)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
@@ -224,6 +248,18 @@ tracing_service_name: file-gateway
 	}
 	if cfg.TracingServiceName != "env-gateway" {
 		t.Fatalf("TracingServiceName = %q, want env-gateway", cfg.TracingServiceName)
+	}
+	if !cfg.PasswordlessEmailEnabled {
+		t.Fatal("PasswordlessEmailEnabled = false, want environment override true")
+	}
+	if cfg.MagicLinkBaseURL != "https://console.example.test/login" {
+		t.Fatalf("MagicLinkBaseURL = %q, want env URL", cfg.MagicLinkBaseURL)
+	}
+	if cfg.MagicLinkTTLSeconds != 600 {
+		t.Fatalf("MagicLinkTTLSeconds = %d, want environment override 600", cfg.MagicLinkTTLSeconds)
+	}
+	if cfg.SMTPHost != "smtp.example.test" || cfg.SMTPPort != 2525 || cfg.SMTPUsername != "env-smtp-user" || cfg.SMTPPassword != "env-smtp-password" || cfg.SMTPFrom != "login@example.test" || cfg.SMTPTLSMode != "implicit" {
+		t.Fatal("SMTP config did not use environment overrides")
 	}
 }
 
@@ -450,6 +486,51 @@ func TestLoadRejectsInvalidBoundaryValues(t *testing.T) {
 				"TRACING_OTLP_ENDPOINT": "   ",
 			},
 		},
+		{
+			name: "passwordless email enabled is not a bool",
+			env: map[string]string{
+				"AUTH_PASSWORDLESS_EMAIL_ENABLED": "sometimes",
+			},
+		},
+		{
+			name: "passwordless email enabled without magic link url",
+			env: map[string]string{
+				"AUTH_PASSWORDLESS_EMAIL_ENABLED": "true",
+				"AUTH_MAGIC_LINK_BASE_URL":        "   ",
+			},
+		},
+		{
+			name: "passwordless email enabled with non-positive ttl",
+			env: map[string]string{
+				"AUTH_PASSWORDLESS_EMAIL_ENABLED": "true",
+				"AUTH_MAGIC_LINK_TTL_SECONDS":     "0",
+			},
+		},
+		{
+			name: "passwordless email enabled without smtp host",
+			env: map[string]string{
+				"AUTH_PASSWORDLESS_EMAIL_ENABLED": "true",
+				"SMTP_HOST":                       "",
+			},
+		},
+		{
+			name: "smtp port is not a number",
+			env: map[string]string{
+				"SMTP_PORT": "mail",
+			},
+		},
+		{
+			name: "smtp port is too high",
+			env: map[string]string{
+				"SMTP_PORT": "70000",
+			},
+		},
+		{
+			name: "invalid smtp tls mode",
+			env: map[string]string{
+				"SMTP_TLS_MODE": "opportunistic",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -466,6 +547,25 @@ func TestLoadRejectsInvalidBoundaryValues(t *testing.T) {
 				t.Fatal("Load returned nil error, want validation error")
 			}
 		})
+	}
+}
+
+func TestLoadRejectsProductionMagicLinkHTTPBaseURL(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("DATABASE_URL", "postgres://llmgw:llmgw@example.com:5432/llmgw?sslmode=require")
+	t.Setenv("PLATFORM_BOOTSTRAP_TOKEN", "prod-bootstrap-token-012345678901")
+	t.Setenv("TOKEN_HASH_SECRET", "prod-token-hash-secret-0123456789")
+	t.Setenv("SECRET_ENCRYPTION_KEY", "fedcba98765432100123456789abcdef")
+	t.Setenv("AUTH_PASSWORDLESS_EMAIL_ENABLED", "true")
+	t.Setenv("AUTH_MAGIC_LINK_BASE_URL", "http://console.example.test/login")
+	t.Setenv("SMTP_HOST", "smtp.example.test")
+	t.Setenv("SMTP_PORT", "587")
+	t.Setenv("SMTP_USERNAME", "smtp-user")
+	t.Setenv("SMTP_PASSWORD", "smtp-password")
+	t.Setenv("SMTP_FROM", "login@example.test")
+
+	if _, err := Load(""); err == nil {
+		t.Fatal("Load returned nil error, want production magic link HTTPS validation error")
 	}
 }
 

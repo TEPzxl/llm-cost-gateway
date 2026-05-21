@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { createApiClient } from "../api/client";
 
 type LoginPageProps = {
@@ -10,19 +10,48 @@ type LoginPageProps = {
 const passwordlessMockEnabled =
   process.env.NEXT_PUBLIC_ENABLE_PASSWORDLESS_MOCK === "true" ||
   process.env.NODE_ENV !== "production";
+const passwordlessEmailEnabled =
+  process.env.NEXT_PUBLIC_ENABLE_PASSWORDLESS_EMAIL === "true";
+
+type LoginMode = "admin-token" | "passwordless-mock" | "passwordless-email";
 
 export function LoginPage({ onLogin }: LoginPageProps) {
   const client = useMemo(() => createApiClient({ getToken: () => null }), []);
-  const [mode, setMode] = useState<"admin-token" | "passwordless">("admin-token");
+  const [mode, setMode] = useState<LoginMode>("admin-token");
   const [token, setToken] = useState("");
   const [orgSlug, setOrgSlug] = useState("");
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
 
-  function selectMode(nextMode: "admin-token" | "passwordless") {
+  useEffect(() => {
+    if (!passwordlessEmailEnabled) {
+      return;
+    }
+    const magicToken = new URLSearchParams(window.location.search).get("magic_token");
+    if (!magicToken) {
+      return;
+    }
+    setLoading(true);
+    setError("");
+    setNotice("");
+    client
+      .verifyPasswordlessMagicLink({ token: magicToken })
+      .then((result) => {
+        window.history.replaceState(null, "", window.location.pathname);
+        onLogin(result.token);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "登录链接无效或已过期。");
+      })
+      .finally(() => setLoading(false));
+  }, [client, onLogin]);
+
+  function selectMode(nextMode: LoginMode) {
     setMode(nextMode);
     setError("");
+    setNotice("");
     if (nextMode === "admin-token") {
       setOrgSlug("");
       setEmail("");
@@ -33,7 +62,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (mode === "passwordless" && passwordlessMockEnabled) {
+    if (mode === "passwordless-mock" && passwordlessMockEnabled) {
       const slug = orgSlug.trim();
       const userEmail = email.trim();
       if (!slug || !userEmail) {
@@ -50,6 +79,29 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         onLogin(result.token);
       } catch (err) {
         setError(err instanceof Error ? err.message : "登录失败。");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+    if (mode === "passwordless-email" && passwordlessEmailEnabled) {
+      const slug = orgSlug.trim();
+      const userEmail = email.trim();
+      if (!slug || !userEmail) {
+        setError("组织标识和邮箱不能为空。");
+        return;
+      }
+      setLoading(true);
+      setError("");
+      setNotice("");
+      try {
+        await client.requestPasswordlessMagicLink({
+          org_slug: slug,
+          email: userEmail
+        });
+        setNotice("如果该邮箱属于此组织，登录链接会发送到邮箱中。");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "发送登录链接失败。");
       } finally {
         setLoading(false);
       }
@@ -80,11 +132,20 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           </button>
           {passwordlessMockEnabled && (
             <button
-              className={mode === "passwordless" ? "button-secondary active" : "button-secondary"}
+              className={mode === "passwordless-mock" ? "button-secondary active" : "button-secondary"}
               type="button"
-              onClick={() => selectMode("passwordless")}
+              onClick={() => selectMode("passwordless-mock")}
             >
               免密登录（演示）
+            </button>
+          )}
+          {passwordlessEmailEnabled && (
+            <button
+              className={mode === "passwordless-email" ? "button-secondary active" : "button-secondary"}
+              type="button"
+              onClick={() => selectMode("passwordless-email")}
+            >
+              邮箱免密登录
             </button>
           )}
         </div>
@@ -135,8 +196,9 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           </>
         )}
         {error && <div className="alert error">{error}</div>}
+        {notice && <div className="alert success">{notice}</div>}
         <button className="button" type="submit" disabled={loading}>
-          {loading ? "登录中..." : "登录"}
+          {loading ? "处理中..." : mode === "passwordless-email" ? "发送登录链接" : "登录"}
         </button>
       </form>
     </main>

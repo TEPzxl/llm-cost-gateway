@@ -60,6 +60,53 @@ test("posts passwordless mock login without bearer token", async () => {
   assert.equal(result.token, "llmgw_session_plain");
 });
 
+test("requests and verifies passwordless magic link without bearer token", async () => {
+  const calls = [];
+  const client = createApiClient({
+    baseUrl: "http://gateway.test",
+    getToken: () => "ignored-token",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      if (url.endsWith("/request")) {
+        return new Response(JSON.stringify({ status: "accepted" }), {
+          status: 202,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          token: "llmgw_session_magic",
+          token_type: "session",
+          expires_at: "2026-05-22T00:00:00Z",
+          org_id: "00000000-0000-0000-0000-000000000001",
+          org_slug: "demo-org",
+          user_id: "00000000-0000-0000-0000-000000000002",
+          email: "owner@example.com",
+          display_name: "Owner",
+          membership_id: "00000000-0000-0000-0000-000000000003",
+          role: "owner"
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  });
+
+  await client.requestPasswordlessMagicLink({
+    org_slug: "demo-org",
+    email: "owner@example.com"
+  });
+  const result = await client.verifyPasswordlessMagicLink({
+    token: "llmgw_magic_plain"
+  });
+
+  assert.equal(calls[0].url, "http://gateway.test/api/v1/admin/sessions/passwordless/request");
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal("Authorization" in calls[0].init.headers, false);
+  assert.equal(calls[1].url, "http://gateway.test/api/v1/admin/sessions/passwordless/verify");
+  assert.equal("Authorization" in calls[1].init.headers, false);
+  assert.equal(result.token, "llmgw_session_magic");
+});
+
 test("reports non-json api responses clearly", async () => {
   const client = createApiClient({
     baseUrl: "http://gateway.test",

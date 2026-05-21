@@ -2,7 +2,7 @@
 
 SaaS 多租户 LLM 网关与 CostOps 平台。
 
-当前实现状态：阶段 1、阶段 2、阶段 3 任务已完成，项目具备 v0.3 CostOps 平台化能力。
+当前实现状态：阶段 1、阶段 2、阶段 3 任务已完成，项目具备 v0.3 CostOps 平台化能力。生产上线准备事项已整理为阶段 4 SDD，见 `docs/10_PRODUCTION_READINESS_SDD.md`。
 
 ## 环境要求
 
@@ -118,7 +118,7 @@ cd web/console && npm test
 http://localhost:3000
 ```
 
-使用 `.demo.env` 中的 `DEMO_ADMIN_TOKEN` 登录。管理后台把 token 存在当前浏览器会话的 `sessionStorage` 中，不写入 `localStorage`。
+使用 `.demo.env` 中的 `DEMO_ADMIN_TOKEN` 登录。管理后台把 token 存在当前浏览器会话的 `sessionStorage` 中，不写入 `localStorage`。生产环境可通过 `AUTH_PASSWORDLESS_EMAIL_ENABLED=true` 和 SMTP 配置启用真实邮件免密登录。
 
 已实现页面：
 
@@ -205,6 +205,7 @@ curl http://localhost:8080/metrics
 - `docs/01_PHASE_1_V0_1_SAAS_MVP.md`：阶段 1 任务计划。
 - `docs/02_PHASE_2_V0_2_PRODUCTION_READY.md`：阶段 2 任务计划。
 - `docs/03_PHASE_3_V0_3_COSTOPS_PLATFORM.md`：阶段 3 任务计划。
+- `docs/10_PRODUCTION_READINESS_SDD.md`：阶段 4 生产上线准备任务计划。
 
 ## 配置
 
@@ -239,5 +240,14 @@ curl http://localhost:8080/metrics
 - `TRACING_OTLP_ENDPOINT`
 - `TRACING_INSECURE`
 - `TRACING_SERVICE_NAME`
+- `AUTH_PASSWORDLESS_EMAIL_ENABLED`
+- `AUTH_MAGIC_LINK_BASE_URL`
+- `AUTH_MAGIC_LINK_TTL_SECONDS`
+- `SMTP_HOST`
+- `SMTP_PORT`
+- `SMTP_USERNAME`
+- `SMTP_PASSWORD`
+- `SMTP_FROM`
+- `SMTP_TLS_MODE`
 
 `SECRET_ENCRYPTION_KEY` 必须是 32 字节，用于 AES-256。

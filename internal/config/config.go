@@ -14,33 +14,42 @@ import (
 const aes256KeyLength = 32
 
 type Config struct {
-	AppEnv                 string   `yaml:"app_env"`
-	ServerPort             int      `yaml:"server_port"`
-	DatabaseURL            string   `yaml:"database_url"`
-	RedisURL               string   `yaml:"redis_url"`
-	PlatformBootstrapToken string   `yaml:"platform_bootstrap_token"`
-	TokenHashSecret        string   `yaml:"token_hash_secret"`
-	SecretEncryptionKey    string   `yaml:"secret_encryption_key"`
-	LogLevel               string   `yaml:"log_level"`
-	MaxRetries             int      `yaml:"max_retries"`
-	RetryBackoffMS         int      `yaml:"retry_backoff_ms"`
-	KafkaEnabled           bool     `yaml:"kafka_enabled"`
-	KafkaBrokers           []string `yaml:"kafka_brokers"`
-	KafkaUsageTopic        string   `yaml:"kafka_usage_topic"`
-	ClickHouseEnabled      bool     `yaml:"clickhouse_enabled"`
-	ClickHouseURL          string   `yaml:"clickhouse_url"`
-	ClickHouseDatabase     string   `yaml:"clickhouse_database"`
-	ClickHouseUsername     string   `yaml:"clickhouse_username"`
-	ClickHousePassword     string   `yaml:"clickhouse_password"`
-	PromptCacheEnabled     bool     `yaml:"prompt_cache_enabled"`
-	PromptCacheTTLSeconds  int      `yaml:"prompt_cache_ttl_seconds"`
-	SemanticCacheEnabled   bool     `yaml:"semantic_cache_enabled"`
-	SemanticCacheThreshold float64  `yaml:"semantic_cache_threshold"`
-	SemanticCacheMaxTemp   float64  `yaml:"semantic_cache_max_temperature"`
-	TracingEnabled         bool     `yaml:"tracing_enabled"`
-	TracingOTLPEndpoint    string   `yaml:"tracing_otlp_endpoint"`
-	TracingInsecure        bool     `yaml:"tracing_insecure"`
-	TracingServiceName     string   `yaml:"tracing_service_name"`
+	AppEnv                   string   `yaml:"app_env"`
+	ServerPort               int      `yaml:"server_port"`
+	DatabaseURL              string   `yaml:"database_url"`
+	RedisURL                 string   `yaml:"redis_url"`
+	PlatformBootstrapToken   string   `yaml:"platform_bootstrap_token"`
+	TokenHashSecret          string   `yaml:"token_hash_secret"`
+	SecretEncryptionKey      string   `yaml:"secret_encryption_key"`
+	LogLevel                 string   `yaml:"log_level"`
+	MaxRetries               int      `yaml:"max_retries"`
+	RetryBackoffMS           int      `yaml:"retry_backoff_ms"`
+	KafkaEnabled             bool     `yaml:"kafka_enabled"`
+	KafkaBrokers             []string `yaml:"kafka_brokers"`
+	KafkaUsageTopic          string   `yaml:"kafka_usage_topic"`
+	ClickHouseEnabled        bool     `yaml:"clickhouse_enabled"`
+	ClickHouseURL            string   `yaml:"clickhouse_url"`
+	ClickHouseDatabase       string   `yaml:"clickhouse_database"`
+	ClickHouseUsername       string   `yaml:"clickhouse_username"`
+	ClickHousePassword       string   `yaml:"clickhouse_password"`
+	PromptCacheEnabled       bool     `yaml:"prompt_cache_enabled"`
+	PromptCacheTTLSeconds    int      `yaml:"prompt_cache_ttl_seconds"`
+	SemanticCacheEnabled     bool     `yaml:"semantic_cache_enabled"`
+	SemanticCacheThreshold   float64  `yaml:"semantic_cache_threshold"`
+	SemanticCacheMaxTemp     float64  `yaml:"semantic_cache_max_temperature"`
+	TracingEnabled           bool     `yaml:"tracing_enabled"`
+	TracingOTLPEndpoint      string   `yaml:"tracing_otlp_endpoint"`
+	TracingInsecure          bool     `yaml:"tracing_insecure"`
+	TracingServiceName       string   `yaml:"tracing_service_name"`
+	PasswordlessEmailEnabled bool     `yaml:"auth_passwordless_email_enabled"`
+	MagicLinkBaseURL         string   `yaml:"auth_magic_link_base_url"`
+	MagicLinkTTLSeconds      int      `yaml:"auth_magic_link_ttl_seconds"`
+	SMTPHost                 string   `yaml:"smtp_host"`
+	SMTPPort                 int      `yaml:"smtp_port"`
+	SMTPUsername             string   `yaml:"smtp_username"`
+	SMTPPassword             string   `yaml:"smtp_password"`
+	SMTPFrom                 string   `yaml:"smtp_from"`
+	SMTPTLSMode              string   `yaml:"smtp_tls_mode"`
 }
 
 func Load(path string) (Config, error) {
@@ -133,6 +142,26 @@ func (c Config) Validate() error {
 			return fmt.Errorf("TRACING_SERVICE_NAME is required when tracing is enabled")
 		}
 	}
+	if c.MagicLinkTTLSeconds <= 0 {
+		return fmt.Errorf("AUTH_MAGIC_LINK_TTL_SECONDS must be greater than 0")
+	}
+	if c.SMTPPort <= 0 || c.SMTPPort > 65535 {
+		return fmt.Errorf("SMTP_PORT must be between 1 and 65535")
+	}
+	if !validSMTPTLSMode(c.SMTPTLSMode) {
+		return fmt.Errorf("SMTP_TLS_MODE must be one of none, starttls, implicit")
+	}
+	if c.PasswordlessEmailEnabled {
+		if err := validateHTTPURL("AUTH_MAGIC_LINK_BASE_URL", c.MagicLinkBaseURL); err != nil {
+			return err
+		}
+		if strings.TrimSpace(c.SMTPHost) == "" {
+			return fmt.Errorf("SMTP_HOST is required when passwordless email is enabled")
+		}
+		if strings.TrimSpace(c.SMTPFrom) == "" {
+			return fmt.Errorf("SMTP_FROM is required when passwordless email is enabled")
+		}
+	}
 	if c.AppEnv == "production" {
 		if err := validateProductionConfig(c); err != nil {
 			return err
@@ -143,29 +172,34 @@ func (c Config) Validate() error {
 
 func defaultConfig() Config {
 	return Config{
-		AppEnv:                 "development",
-		ServerPort:             8080,
-		DatabaseURL:            "postgres://llmgw:llmgw@localhost:5432/llmgw?sslmode=disable",
-		RedisURL:               "redis://localhost:6379/0",
-		LogLevel:               "info",
-		MaxRetries:             1,
-		RetryBackoffMS:         100,
-		KafkaEnabled:           false,
-		KafkaBrokers:           []string{},
-		KafkaUsageTopic:        "llm-usage-events",
-		ClickHouseEnabled:      false,
-		ClickHouseURL:          "http://localhost:8123",
-		ClickHouseDatabase:     "llmgw",
-		ClickHouseUsername:     "default",
-		PromptCacheEnabled:     true,
-		PromptCacheTTLSeconds:  300,
-		SemanticCacheEnabled:   false,
-		SemanticCacheThreshold: 0.92,
-		SemanticCacheMaxTemp:   0.3,
-		TracingEnabled:         false,
-		TracingOTLPEndpoint:    "localhost:4318",
-		TracingInsecure:        true,
-		TracingServiceName:     "llm-cost-gateway",
+		AppEnv:                   "development",
+		ServerPort:               8080,
+		DatabaseURL:              "postgres://llmgw:llmgw@localhost:5432/llmgw?sslmode=disable",
+		RedisURL:                 "redis://localhost:6379/0",
+		LogLevel:                 "info",
+		MaxRetries:               1,
+		RetryBackoffMS:           100,
+		KafkaEnabled:             false,
+		KafkaBrokers:             []string{},
+		KafkaUsageTopic:          "llm-usage-events",
+		ClickHouseEnabled:        false,
+		ClickHouseURL:            "http://localhost:8123",
+		ClickHouseDatabase:       "llmgw",
+		ClickHouseUsername:       "default",
+		PromptCacheEnabled:       true,
+		PromptCacheTTLSeconds:    300,
+		SemanticCacheEnabled:     false,
+		SemanticCacheThreshold:   0.92,
+		SemanticCacheMaxTemp:     0.3,
+		TracingEnabled:           false,
+		TracingOTLPEndpoint:      "localhost:4318",
+		TracingInsecure:          true,
+		TracingServiceName:       "llm-cost-gateway",
+		PasswordlessEmailEnabled: false,
+		MagicLinkBaseURL:         "http://localhost:3000",
+		MagicLinkTTLSeconds:      900,
+		SMTPPort:                 587,
+		SMTPTLSMode:              "starttls",
 	}
 }
 
@@ -283,6 +317,33 @@ func applyEnv(cfg *Config) error {
 		cfg.TracingInsecure = insecure
 	}
 	setStringFromEnv("TRACING_SERVICE_NAME", &cfg.TracingServiceName)
+	if value := os.Getenv("AUTH_PASSWORDLESS_EMAIL_ENABLED"); value != "" {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("parse AUTH_PASSWORDLESS_EMAIL_ENABLED: %w", err)
+		}
+		cfg.PasswordlessEmailEnabled = enabled
+	}
+	setStringFromEnv("AUTH_MAGIC_LINK_BASE_URL", &cfg.MagicLinkBaseURL)
+	if value := os.Getenv("AUTH_MAGIC_LINK_TTL_SECONDS"); value != "" {
+		ttl, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("parse AUTH_MAGIC_LINK_TTL_SECONDS: %w", err)
+		}
+		cfg.MagicLinkTTLSeconds = ttl
+	}
+	setStringFromEnv("SMTP_HOST", &cfg.SMTPHost)
+	if value := os.Getenv("SMTP_PORT"); value != "" {
+		port, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("parse SMTP_PORT: %w", err)
+		}
+		cfg.SMTPPort = port
+	}
+	setStringFromEnv("SMTP_USERNAME", &cfg.SMTPUsername)
+	setStringFromEnv("SMTP_PASSWORD", &cfg.SMTPPassword)
+	setStringFromEnv("SMTP_FROM", &cfg.SMTPFrom)
+	setStringFromEnv("SMTP_TLS_MODE", &cfg.SMTPTLSMode)
 	return nil
 }
 
@@ -322,6 +383,15 @@ func validLogLevel(value string) bool {
 	}
 }
 
+func validSMTPTLSMode(value string) bool {
+	switch value {
+	case "none", "starttls", "implicit":
+		return true
+	default:
+		return false
+	}
+}
+
 func validatePostgresURL(value string) error {
 	parsed, err := url.Parse(value)
 	if err != nil {
@@ -352,6 +422,15 @@ func validateProductionConfig(c Config) error {
 	}
 	if strings.EqualFold(parsed.Query().Get("sslmode"), "disable") {
 		return fmt.Errorf("DATABASE_URL must not use sslmode=disable in production")
+	}
+	if c.PasswordlessEmailEnabled {
+		magicLinkURL, err := url.Parse(c.MagicLinkBaseURL)
+		if err != nil {
+			return fmt.Errorf("AUTH_MAGIC_LINK_BASE_URL must be a valid URL: %w", err)
+		}
+		if magicLinkURL.Scheme != "https" {
+			return fmt.Errorf("AUTH_MAGIC_LINK_BASE_URL must use https in production")
+		}
 	}
 	return nil
 }

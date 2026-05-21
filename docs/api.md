@@ -69,7 +69,7 @@ Authorization: Bearer <PLATFORM_BOOTSTRAP_TOKEN>
 Authorization: Bearer <DEMO_ADMIN_TOKEN>
 ```
 
-也支持 passwordless mock session 返回的 session token。`org_id` 从 token/session 解析，调用方不能通过请求参数指定租户。
+也支持 passwordless session 返回的 session token。`org_id` 从 token/session 解析，调用方不能通过请求参数指定租户。
 
 ### POST `/api/v1/admin/sessions/passwordless-mock`
 
@@ -83,6 +83,35 @@ Authorization: Bearer <DEMO_ADMIN_TOKEN>
 ```
 
 响应包含短期 session token、用户、组织和角色信息。
+
+### POST `/api/v1/admin/sessions/passwordless/request`
+
+真实邮件免密登录入口，不需要 Bearer Token。仅在 `AUTH_PASSWORDLESS_EMAIL_ENABLED=true` 且 SMTP sender 已配置时注册。
+
+```json
+{
+  "org_slug": "demo",
+  "email": "owner@example.com"
+}
+```
+
+响应固定为 accepted，避免邮箱枚举：
+
+```json
+{"status":"accepted"}
+```
+
+### POST `/api/v1/admin/sessions/passwordless/verify`
+
+消费邮件链接中的一次性 token，返回短期 session token。magic link token 只保存 hash，成功消费后不能再次使用。
+
+```json
+{
+  "token": "llmgw_magic_..."
+}
+```
+
+响应结构与 passwordless mock login 相同，包含 session token、用户、组织和角色信息。
 
 ### GET `/api/v1/admin/me`
 

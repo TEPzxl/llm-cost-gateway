@@ -13,11 +13,16 @@ import (
 )
 
 type SessionHandler struct {
-	service *auth.SessionService
+	service   *auth.SessionService
+	magicLink *auth.MagicLinkService
 }
 
-func NewSessionHandler(service *auth.SessionService) *SessionHandler {
-	return &SessionHandler{service: service}
+func NewSessionHandler(service *auth.SessionService, magicLink ...*auth.MagicLinkService) *SessionHandler {
+	handler := &SessionHandler{service: service}
+	if len(magicLink) > 0 {
+		handler.magicLink = magicLink[0]
+	}
+	return handler
 }
 
 type passwordlessMockLoginRequest struct {
@@ -36,6 +41,19 @@ type passwordlessMockLoginResponse struct {
 	DisplayName  string    `json:"display_name"`
 	MembershipID uuid.UUID `json:"membership_id"`
 	Role         string    `json:"role"`
+}
+
+type passwordlessRequestMagicLinkRequest struct {
+	OrgSlug string `json:"org_slug"`
+	Email   string `json:"email"`
+}
+
+type passwordlessVerifyMagicLinkRequest struct {
+	Token string `json:"token"`
+}
+
+type passwordlessRequestMagicLinkResponse struct {
+	Status string `json:"status"`
 }
 
 func (h *SessionHandler) PasswordlessMockLogin(c *gin.Context) {
@@ -66,6 +84,71 @@ func (h *SessionHandler) PasswordlessMockLogin(c *gin.Context) {
 		return
 	}
 
+	httpapi.RespondJSON(c, http.StatusOK, passwordlessMockLoginResponse{
+		Token:        result.Token,
+		TokenType:    "session",
+		ExpiresAt:    result.Session.ExpiresAt,
+		OrgID:        result.OrgID,
+		OrgSlug:      result.OrgSlug,
+		UserID:       result.UserID,
+		Email:        result.Email,
+		DisplayName:  result.DisplayName,
+		MembershipID: result.MembershipID,
+		Role:         result.Role,
+	})
+}
+
+func (h *SessionHandler) RequestMagicLink(c *gin.Context) {
+	if h.magicLink == nil {
+		httpapi.RespondError(c, httpapi.NotFound("magic link login is not enabled"))
+		return
+	}
+	var request passwordlessRequestMagicLinkRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		httpapi.RespondError(c, httpapi.InvalidRequest("invalid JSON body"))
+		return
+	}
+	if strings.TrimSpace(request.OrgSlug) == "" {
+		httpapi.RespondError(c, httpapi.InvalidRequest("org_slug is required"))
+		return
+	}
+	if strings.TrimSpace(request.Email) == "" {
+		httpapi.RespondError(c, httpapi.InvalidRequest("email is required"))
+		return
+	}
+	if err := h.magicLink.Request(c.Request.Context(), auth.MagicLinkRequestParams{
+		OrgSlug: request.OrgSlug,
+		Email:   request.Email,
+	}); err != nil {
+		httpapi.RespondError(c, httpapi.InternalError("internal server error"))
+		return
+	}
+	httpapi.RespondJSON(c, http.StatusAccepted, passwordlessRequestMagicLinkResponse{Status: "accepted"})
+}
+
+func (h *SessionHandler) VerifyMagicLink(c *gin.Context) {
+	if h.magicLink == nil {
+		httpapi.RespondError(c, httpapi.NotFound("magic link login is not enabled"))
+		return
+	}
+	var request passwordlessVerifyMagicLinkRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		httpapi.RespondError(c, httpapi.InvalidRequest("invalid JSON body"))
+		return
+	}
+	if strings.TrimSpace(request.Token) == "" {
+		httpapi.RespondError(c, httpapi.InvalidRequest("token is required"))
+		return
+	}
+	result, err := h.magicLink.Consume(c.Request.Context(), auth.MagicLinkConsumeParams{Token: request.Token})
+	if err != nil {
+		if errors.Is(err, auth.ErrInvalidMagicLink) {
+			httpapi.RespondError(c, httpapi.Unauthorized("invalid magic link"))
+			return
+		}
+		httpapi.RespondError(c, httpapi.InternalError("internal server error"))
+		return
+	}
 	httpapi.RespondJSON(c, http.StatusOK, passwordlessMockLoginResponse{
 		Token:        result.Token,
 		TokenType:    "session",

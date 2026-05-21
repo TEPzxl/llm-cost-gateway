@@ -158,6 +158,19 @@ type CostRecord struct {
 	PricingVersionID *uuid.UUID      `db:"pricing_version_id" json:"pricing_version_id"`
 }
 
+type MagicLinkToken struct {
+	ID          uuid.UUID  `db:"id" json:"id"`
+	OrgID       uuid.UUID  `db:"org_id" json:"org_id"`
+	UserID      uuid.UUID  `db:"user_id" json:"user_id"`
+	Email       string     `db:"email" json:"email"`
+	TokenPrefix string     `db:"token_prefix" json:"token_prefix"`
+	TokenHash   string     `db:"token_hash" json:"token_hash"`
+	Status      string     `db:"status" json:"status"`
+	ExpiresAt   time.Time  `db:"expires_at" json:"expires_at"`
+	ConsumedAt  *time.Time `db:"consumed_at" json:"consumed_at"`
+	CreatedAt   time.Time  `db:"created_at" json:"created_at"`
+}
+
 type Model struct {
 	ID                             uuid.UUID   `db:"id" json:"id"`
 	OrgID                          uuid.UUID   `db:"org_id" json:"org_id"`

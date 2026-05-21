@@ -127,6 +127,23 @@ http://localhost:3000
 
 登录时输入 `.demo.env` 中的 `DEMO_ADMIN_TOKEN`。前端使用 `sessionStorage` 保存当前会话 token，不写入 `localStorage`。
 
+生产环境可启用真实邮件免密登录：
+
+```bash
+AUTH_PASSWORDLESS_EMAIL_ENABLED=true
+AUTH_MAGIC_LINK_BASE_URL=https://console.example.com
+AUTH_MAGIC_LINK_TTL_SECONDS=900
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=llmgw
+SMTP_PASSWORD=...
+SMTP_FROM=login@example.com
+SMTP_TLS_MODE=starttls
+NEXT_PUBLIC_ENABLE_PASSWORDLESS_EMAIL=true
+```
+
+`APP_ENV=production` 时 magic link base URL 必须使用 HTTPS。开发和测试环境仍可使用 passwordless mock；生产环境不会注册 mock 登录接口。
+
 ## Metrics
 
 Prometheus UI：

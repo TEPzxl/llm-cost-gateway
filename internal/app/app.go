@@ -11,6 +11,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/analytics"
 	promptcache "github.com/tep/llm-cost-gateway/internal/cache"
 	"github.com/tep/llm-cost-gateway/internal/config"
+	"github.com/tep/llm-cost-gateway/internal/email"
 	"github.com/tep/llm-cost-gateway/internal/embedding"
 	"github.com/tep/llm-cost-gateway/internal/events"
 	"github.com/tep/llm-cost-gateway/internal/http/middleware"
@@ -114,22 +115,26 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 	}
 
 	router := NewRouter(RouterConfig{
-		AppEnv:                 cfg.AppEnv,
-		PlatformBootstrapToken: cfg.PlatformBootstrapToken,
-		TokenHashSecret:        cfg.TokenHashSecret,
-		SecretEncryptionKey:    cfg.SecretEncryptionKey,
-		MaxRetries:             cfg.MaxRetries,
-		RetryBackoffMS:         cfg.RetryBackoffMS,
-		Store:                  st,
-		RateLimiter:            limiter,
-		Metrics:                observability.NewMetrics(),
-		UsageEventPublisher:    usageEventPublisher,
-		UsageAnalytics:         usageAnalytics,
-		PromptCache:            promptCache,
-		SemanticCache:          semanticCache,
-		EmbeddingAdapter:       embedding.NewMockAdapter(),
-		SemanticCacheThreshold: cfg.SemanticCacheThreshold,
-		SemanticCacheMaxTemp:   cfg.SemanticCacheMaxTemp,
+		AppEnv:                   cfg.AppEnv,
+		PlatformBootstrapToken:   cfg.PlatformBootstrapToken,
+		TokenHashSecret:          cfg.TokenHashSecret,
+		SecretEncryptionKey:      cfg.SecretEncryptionKey,
+		MaxRetries:               cfg.MaxRetries,
+		RetryBackoffMS:           cfg.RetryBackoffMS,
+		Store:                    st,
+		RateLimiter:              limiter,
+		Metrics:                  observability.NewMetrics(),
+		UsageEventPublisher:      usageEventPublisher,
+		UsageAnalytics:           usageAnalytics,
+		PromptCache:              promptCache,
+		SemanticCache:            semanticCache,
+		EmbeddingAdapter:         embedding.NewMockAdapter(),
+		SemanticCacheThreshold:   cfg.SemanticCacheThreshold,
+		SemanticCacheMaxTemp:     cfg.SemanticCacheMaxTemp,
+		PasswordlessEmailEnabled: cfg.PasswordlessEmailEnabled,
+		MagicLinkBaseURL:         cfg.MagicLinkBaseURL,
+		MagicLinkTTL:             time.Duration(cfg.MagicLinkTTLSeconds) * time.Second,
+		EmailSender:              newEmailSender(cfg),
 	}, logger)
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.ServerPort),
@@ -148,6 +153,20 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 		events: multiCloser(usageEventCloser, analyticsCloser),
 		traces: tracerProvider,
 	}, nil
+}
+
+func newEmailSender(cfg Config) email.Sender {
+	if !cfg.PasswordlessEmailEnabled {
+		return nil
+	}
+	return email.NewSMTPSender(email.SMTPConfig{
+		Host:     cfg.SMTPHost,
+		Port:     cfg.SMTPPort,
+		Username: cfg.SMTPUsername,
+		Password: cfg.SMTPPassword,
+		From:     cfg.SMTPFrom,
+		TLSMode:  cfg.SMTPTLSMode,
+	})
 }
 
 func newPromptCache(cfg Config, redisClient redis.Cmdable) (*promptcache.PromptCache, error) {

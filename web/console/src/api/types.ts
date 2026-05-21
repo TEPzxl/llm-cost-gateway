@@ -51,6 +51,19 @@ export type PasswordlessMockLoginRequest = {
   email: string;
 };
 
+export type PasswordlessMagicLinkRequest = {
+  org_slug: string;
+  email: string;
+};
+
+export type PasswordlessMagicLinkRequestResponse = {
+  status: "accepted" | string;
+};
+
+export type PasswordlessMagicLinkVerifyRequest = {
+  token: string;
+};
+
 export type PasswordlessMockLoginResponse = {
   token: string;
   token_type: "session" | string;

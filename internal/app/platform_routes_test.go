@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/tep/llm-cost-gateway/internal/auth"
+	"github.com/tep/llm-cost-gateway/internal/email"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 	"github.com/tep/llm-cost-gateway/internal/testutil"
@@ -139,6 +140,64 @@ func TestPasswordlessMockLoginNotRegisteredInProduction(t *testing.T) {
 	}
 }
 
+func TestPasswordlessEmailMagicLinkCreatesSession(t *testing.T) {
+	ctx := context.Background()
+	sender := email.NewFakeSender()
+	router, st := newTask5TestRouterWithEmail(t, "production", sender)
+
+	orgID := createOrgViaHTTP(t, router, "Magic Org", "magic-route-org")
+	adminToken := createAdminTokenViaHTTP(t, router, orgID)
+	member := createMemberViaHTTP(t, router, adminToken.Token, createMemberRouteRequest{
+		Email:       "owner@example.com",
+		DisplayName: "Owner",
+		Role:        auth.RoleOwner,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/sessions/passwordless/request", strings.NewReader(`{"org_slug":"magic-route-org","email":"owner@example.com"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("POST /sessions/passwordless/request status = %d, want %d; body=%s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	messages := sender.Messages()
+	if len(messages) != 1 {
+		t.Fatalf("sent messages = %d, want 1", len(messages))
+	}
+	token := extractMagicRouteToken(t, messages[0].TextBody)
+
+	verifyReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/sessions/passwordless/verify", strings.NewReader(`{"token":`+strconv.Quote(token)+`}`))
+	verifyReq.Header.Set("Content-Type", "application/json")
+	verifyRec := httptest.NewRecorder()
+	router.ServeHTTP(verifyRec, verifyReq)
+	if verifyRec.Code != http.StatusOK {
+		t.Fatalf("POST /sessions/passwordless/verify status = %d, want %d; body=%s", verifyRec.Code, http.StatusOK, verifyRec.Body.String())
+	}
+	var login passwordlessMockLoginRouteResponse
+	if err := json.Unmarshal(verifyRec.Body.Bytes(), &login); err != nil {
+		t.Fatalf("decode verify response: %v", err)
+	}
+	if login.Token == "" || login.MembershipID != member.MembershipID {
+		t.Fatalf("login = %+v, want session for membership %s", login, member.MembershipID)
+	}
+
+	meReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/me", nil)
+	meReq.Header.Set("Authorization", "Bearer "+login.Token)
+	meRec := httptest.NewRecorder()
+	router.ServeHTTP(meRec, meReq)
+	if meRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/admin/me with magic session status = %d, want %d; body=%s", meRec.Code, http.StatusOK, meRec.Body.String())
+	}
+
+	var storedHash string
+	if err := st.Pool.QueryRow(ctx, `SELECT token_hash FROM magic_link_tokens WHERE org_id = $1`, orgID).Scan(&storedHash); err != nil {
+		t.Fatalf("read magic link token hash: %v", err)
+	}
+	if strings.Contains(messages[0].TextBody, storedHash) {
+		t.Fatal("email body leaked stored magic link token hash")
+	}
+}
+
 type createAdminTokenResponse struct {
 	ID          uuid.UUID `json:"id"`
 	Name        string    `json:"name"`
@@ -168,6 +227,11 @@ func newTask5TestRouter(t *testing.T) (*gin.Engine, *store.Store) {
 
 func newTask5TestRouterWithEnv(t *testing.T, appEnv string) (*gin.Engine, *store.Store) {
 	t.Helper()
+	return newTask5TestRouterWithEmail(t, appEnv, nil)
+}
+
+func newTask5TestRouterWithEmail(t *testing.T, appEnv string, sender email.Sender) (*gin.Engine, *store.Store) {
+	t.Helper()
 
 	ctx := context.Background()
 	pool := testutil.OpenPostgres(t, ctx)
@@ -175,11 +239,14 @@ func newTask5TestRouterWithEnv(t *testing.T, appEnv string) (*gin.Engine, *store
 	resetTask5TestDatabase(t, ctx, st)
 
 	router := NewRouter(RouterConfig{
-		AppEnv:                 appEnv,
-		PlatformBootstrapToken: "bootstrap-token",
-		TokenHashSecret:        "token-hash-secret",
-		SecretEncryptionKey:    "0123456789abcdef0123456789abcdef",
-		Store:                  st,
+		AppEnv:                   appEnv,
+		PlatformBootstrapToken:   "bootstrap-token",
+		TokenHashSecret:          "token-hash-secret",
+		SecretEncryptionKey:      "0123456789abcdef0123456789abcdef",
+		Store:                    st,
+		PasswordlessEmailEnabled: sender != nil,
+		MagicLinkBaseURL:         "https://console.example.com/login",
+		EmailSender:              sender,
 	}, zap.NewNop())
 	return router, st
 }
@@ -190,6 +257,7 @@ func resetTask5TestDatabase(t *testing.T, ctx context.Context, st *store.Store) 
 	_, err := st.Pool.Exec(ctx, `
 		TRUNCATE
 			user_sessions,
+			magic_link_tokens,
 			org_memberships,
 			users,
 			cost_records,
@@ -233,6 +301,17 @@ func createOrgViaHTTP(t *testing.T, router http.Handler, name string, slug strin
 		t.Fatalf("decode create org response: %v", err)
 	}
 	return response.ID
+}
+
+func extractMagicRouteToken(t *testing.T, body string) string {
+	t.Helper()
+	for _, field := range strings.Fields(body) {
+		if idx := strings.Index(field, "magic_token="); idx >= 0 {
+			return strings.TrimSpace(field[idx+len("magic_token="):])
+		}
+	}
+	t.Fatalf("magic_token not found in email body: %q", body)
+	return ""
 }
 
 func createAdminTokenViaHTTP(t *testing.T, router http.Handler, orgID uuid.UUID) createAdminTokenResponse {

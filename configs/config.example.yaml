@@ -25,3 +25,12 @@ tracing_enabled: false
 tracing_otlp_endpoint: localhost:4318
 tracing_insecure: true
 tracing_service_name: llm-cost-gateway
+auth_passwordless_email_enabled: false
+auth_magic_link_base_url: http://localhost:3000
+auth_magic_link_ttl_seconds: 900
+smtp_host: ""
+smtp_port: 587
+smtp_username: ""
+smtp_password: ""
+smtp_from: ""
+smtp_tls_mode: starttls

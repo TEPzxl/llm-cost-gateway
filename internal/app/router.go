@@ -1,6 +1,8 @@
 package app
 
 import (
+	"time"
+
 	"github.com/gin-gonic/gin"
 	"github.com/tep/llm-cost-gateway/internal/analytics"
 	"github.com/tep/llm-cost-gateway/internal/anomaly"
@@ -9,6 +11,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/budget"
 	promptcache "github.com/tep/llm-cost-gateway/internal/cache"
 	"github.com/tep/llm-cost-gateway/internal/costing"
+	"github.com/tep/llm-cost-gateway/internal/email"
 	"github.com/tep/llm-cost-gateway/internal/embedding"
 	"github.com/tep/llm-cost-gateway/internal/events"
 	gatewayservice "github.com/tep/llm-cost-gateway/internal/gateway"
@@ -29,23 +32,27 @@ import (
 const defaultMaxRequestBodyBytes = 8 << 20
 
 type RouterConfig struct {
-	AppEnv                 string
-	PlatformBootstrapToken string
-	TokenHashSecret        string
-	SecretEncryptionKey    string
-	MaxRetries             int
-	RetryBackoffMS         int
-	Store                  *store.Store
-	RateLimiter            middleware.RateLimiter
-	Metrics                *observability.Metrics
-	UsageEventPublisher    events.Publisher
-	UsageAnalytics         *analytics.UsageAnalyticsService
-	PromptCache            *promptcache.PromptCache
-	SemanticCache          *promptcache.SemanticCache
-	EmbeddingAdapter       embedding.Adapter
-	SemanticCacheThreshold float64
-	SemanticCacheMaxTemp   float64
-	Logger                 *zap.Logger
+	AppEnv                   string
+	PlatformBootstrapToken   string
+	TokenHashSecret          string
+	SecretEncryptionKey      string
+	MaxRetries               int
+	RetryBackoffMS           int
+	Store                    *store.Store
+	RateLimiter              middleware.RateLimiter
+	Metrics                  *observability.Metrics
+	UsageEventPublisher      events.Publisher
+	UsageAnalytics           *analytics.UsageAnalyticsService
+	PromptCache              *promptcache.PromptCache
+	SemanticCache            *promptcache.SemanticCache
+	EmbeddingAdapter         embedding.Adapter
+	SemanticCacheThreshold   float64
+	SemanticCacheMaxTemp     float64
+	PasswordlessEmailEnabled bool
+	MagicLinkBaseURL         string
+	MagicLinkTTL             time.Duration
+	EmailSender              email.Sender
+	Logger                   *zap.Logger
 }
 
 func NewRouter(cfg RouterConfig, logger *zap.Logger) *gin.Engine {
@@ -129,6 +136,13 @@ func registerPlatformRoutes(router *gin.Engine, cfg RouterConfig) {
 func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	adminTokenService := auth.NewAdminTokenService(cfg.Store.Queries, cfg.TokenHashSecret)
 	sessionService := auth.NewSessionService(cfg.Store.Queries, cfg.TokenHashSecret)
+	var magicLinkService *auth.MagicLinkService
+	if cfg.PasswordlessEmailEnabled && cfg.EmailSender != nil {
+		magicLinkService = auth.NewMagicLinkService(cfg.Store, cfg.TokenHashSecret, cfg.EmailSender, auth.MagicLinkConfig{
+			BaseURL: cfg.MagicLinkBaseURL,
+			TTL:     cfg.MagicLinkTTL,
+		})
+	}
 	apiKeyService := auth.NewAPIKeyService(cfg.Store.Queries, cfg.TokenHashSecret)
 	publicOutboundOnly := cfg.AppEnv == "production"
 	providerService := provider.NewService(cfg.Store, cfg.SecretEncryptionKey, provider.WithPublicOutboundOnly(publicOutboundOnly))
@@ -150,7 +164,7 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	budgetAlertHandler := admin.NewBudgetAlertHandler(budgetAlertService)
 	anomalyPolicyHandler := admin.NewAnomalyPolicyHandler(anomalyService)
 	auditHandler := admin.NewAuditHandler(auditService)
-	sessionHandler := admin.NewSessionHandler(sessionService)
+	sessionHandler := admin.NewSessionHandler(sessionService, magicLinkService)
 	membersHandler := admin.NewMembersHandler(sessionService)
 	contentPolicyHandler := admin.NewContentPolicyHandler(contentPolicyService)
 	cacheEventHandler := admin.NewCacheEventHandler(cfg.Store.Queries)
@@ -161,6 +175,11 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	if cfg.AppEnv != "production" {
 		publicGroup := router.Group("/api/v1/admin")
 		publicGroup.POST("/sessions/passwordless-mock", sessionHandler.PasswordlessMockLogin)
+	}
+	if magicLinkService != nil {
+		publicGroup := router.Group("/api/v1/admin")
+		publicGroup.POST("/sessions/passwordless/request", sessionHandler.RequestMagicLink)
+		publicGroup.POST("/sessions/passwordless/verify", sessionHandler.VerifyMagicLink)
 	}
 
 	group := router.Group("/api/v1/admin")

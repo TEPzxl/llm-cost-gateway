@@ -26,6 +26,9 @@ import type {
   ListResponse,
   Member,
   Model,
+  PasswordlessMagicLinkRequest,
+  PasswordlessMagicLinkRequestResponse,
+  PasswordlessMagicLinkVerifyRequest,
   PasswordlessMockLoginRequest,
   PasswordlessMockLoginResponse,
   Provider,
@@ -55,8 +58,8 @@ export function createApiClient(options: ApiClientOptions) {
   ).replace(/\/$/, "");
   const fetchImpl = options.fetchImpl ?? fetch;
 
-  async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const token = options.getToken();
+  async function request<T>(path: string, init: RequestInit = {}, authenticated = true): Promise<T> {
+    const token = authenticated ? options.getToken() : null;
     const headers: Record<string, string> = {
       Accept: "application/json",
       ...(init.body ? { "Content-Type": "application/json" } : {}),
@@ -92,7 +95,26 @@ export function createApiClient(options: ApiClientOptions) {
         {
           method: "POST",
           body: JSON.stringify(body)
-        }
+        },
+        false
+      ),
+    requestPasswordlessMagicLink: (body: PasswordlessMagicLinkRequest) =>
+      request<PasswordlessMagicLinkRequestResponse>(
+        "/api/v1/admin/sessions/passwordless/request",
+        {
+          method: "POST",
+          body: JSON.stringify(body)
+        },
+        false
+      ),
+    verifyPasswordlessMagicLink: (body: PasswordlessMagicLinkVerifyRequest) =>
+      request<PasswordlessMockLoginResponse>(
+        "/api/v1/admin/sessions/passwordless/verify",
+        {
+          method: "POST",
+          body: JSON.stringify(body)
+        },
+        false
       ),
     listMembers: () => request<ListResponse<Member>>("/api/v1/admin/members"),
     createMember: (body: CreateMemberRequest) =>
