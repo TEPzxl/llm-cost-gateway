@@ -674,6 +674,7 @@ func createMeteringFixture(t *testing.T, ctx context.Context, st *store.Store) m
 		Name:       "metering-route-policy-" + uuid.NewString(),
 		MatchModel: "fast-chat-" + uuid.NewString(),
 		Strategy:   "single",
+		Config:     json.RawMessage(`{}`),
 		Status:     "active",
 		CreatedAt:  now,
 		UpdatedAt:  now,

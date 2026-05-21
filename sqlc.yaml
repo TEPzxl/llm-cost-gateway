@@ -9,6 +9,7 @@ sql:
       - db/migrations/000005_api_key_quota.up.sql
       - db/migrations/000006_model_pricing_versions.up.sql
       - db/migrations/000007_admin_audit_logs.up.sql
+      - db/migrations/000008_route_policy_config.up.sql
     queries: db/query
     gen:
       go:

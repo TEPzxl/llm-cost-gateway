@@ -7,6 +7,7 @@ package sqlc
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,23 +20,25 @@ INSERT INTO route_policies (
   name,
   match_model,
   strategy,
+  config,
   status,
   created_at,
   updated_at
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8
-) RETURNING id, org_id, name, match_model, strategy, status, created_at, updated_at
+  $1, $2, $3, $4, $5, $6, $7, $8, $9
+) RETURNING id, org_id, name, match_model, strategy, status, created_at, updated_at, config
 `
 
 type CreateRoutePolicyParams struct {
-	ID         uuid.UUID `db:"id" json:"id"`
-	OrgID      uuid.UUID `db:"org_id" json:"org_id"`
-	Name       string    `db:"name" json:"name"`
-	MatchModel string    `db:"match_model" json:"match_model"`
-	Strategy   string    `db:"strategy" json:"strategy"`
-	Status     string    `db:"status" json:"status"`
-	CreatedAt  time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
+	ID         uuid.UUID       `db:"id" json:"id"`
+	OrgID      uuid.UUID       `db:"org_id" json:"org_id"`
+	Name       string          `db:"name" json:"name"`
+	MatchModel string          `db:"match_model" json:"match_model"`
+	Strategy   string          `db:"strategy" json:"strategy"`
+	Config     json.RawMessage `db:"config" json:"config"`
+	Status     string          `db:"status" json:"status"`
+	CreatedAt  time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt  time.Time       `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) CreateRoutePolicy(ctx context.Context, arg CreateRoutePolicyParams) (RoutePolicy, error) {
@@ -45,6 +48,7 @@ func (q *Queries) CreateRoutePolicy(ctx context.Context, arg CreateRoutePolicyPa
 		arg.Name,
 		arg.MatchModel,
 		arg.Strategy,
+		arg.Config,
 		arg.Status,
 		arg.CreatedAt,
 		arg.UpdatedAt,
@@ -59,6 +63,7 @@ func (q *Queries) CreateRoutePolicy(ctx context.Context, arg CreateRoutePolicyPa
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Config,
 	)
 	return i, err
 }
@@ -115,7 +120,7 @@ func (q *Queries) CreateRouteTarget(ctx context.Context, arg CreateRouteTargetPa
 }
 
 const getRoutePolicy = `-- name: GetRoutePolicy :one
-SELECT id, org_id, name, match_model, strategy, status, created_at, updated_at
+SELECT id, org_id, name, match_model, strategy, status, created_at, updated_at, config
 FROM route_policies
 WHERE org_id = $1 AND id = $2
 `
@@ -137,12 +142,13 @@ func (q *Queries) GetRoutePolicy(ctx context.Context, arg GetRoutePolicyParams) 
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Config,
 	)
 	return i, err
 }
 
 const getRoutePolicyByMatchModel = `-- name: GetRoutePolicyByMatchModel :one
-SELECT id, org_id, name, match_model, strategy, status, created_at, updated_at
+SELECT id, org_id, name, match_model, strategy, status, created_at, updated_at, config
 FROM route_policies
 WHERE org_id = $1 AND match_model = $2 AND status = 'active'
 `
@@ -164,12 +170,13 @@ func (q *Queries) GetRoutePolicyByMatchModel(ctx context.Context, arg GetRoutePo
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Config,
 	)
 	return i, err
 }
 
 const listRoutePolicies = `-- name: ListRoutePolicies :many
-SELECT id, org_id, name, match_model, strategy, status, created_at, updated_at
+SELECT id, org_id, name, match_model, strategy, status, created_at, updated_at, config
 FROM route_policies
 WHERE org_id = $1
 ORDER BY created_at DESC, id DESC
@@ -193,6 +200,7 @@ func (q *Queries) ListRoutePolicies(ctx context.Context, orgID uuid.UUID) ([]Rou
 			&i.Status,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Config,
 		); err != nil {
 			return nil, err
 		}

@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -103,6 +104,7 @@ func (s *Service) CreateRoutePolicy(ctx context.Context, params CreateRoutePolic
 			Name:       strings.TrimSpace(params.Name),
 			MatchModel: strings.TrimSpace(params.MatchModel),
 			Strategy:   params.Strategy,
+			Config:     json.RawMessage(`{}`),
 			Status:     "active",
 			CreatedAt:  now,
 			UpdatedAt:  now,

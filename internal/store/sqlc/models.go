@@ -199,14 +199,15 @@ type RequestLog struct {
 }
 
 type RoutePolicy struct {
-	ID         uuid.UUID `db:"id" json:"id"`
-	OrgID      uuid.UUID `db:"org_id" json:"org_id"`
-	Name       string    `db:"name" json:"name"`
-	MatchModel string    `db:"match_model" json:"match_model"`
-	Strategy   string    `db:"strategy" json:"strategy"`
-	Status     string    `db:"status" json:"status"`
-	CreatedAt  time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
+	ID         uuid.UUID       `db:"id" json:"id"`
+	OrgID      uuid.UUID       `db:"org_id" json:"org_id"`
+	Name       string          `db:"name" json:"name"`
+	MatchModel string          `db:"match_model" json:"match_model"`
+	Strategy   string          `db:"strategy" json:"strategy"`
+	Status     string          `db:"status" json:"status"`
+	CreatedAt  time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt  time.Time       `db:"updated_at" json:"updated_at"`
+	Config     json.RawMessage `db:"config" json:"config"`
 }
 
 type RouteTarget struct {

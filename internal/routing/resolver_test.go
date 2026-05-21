@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -227,6 +228,7 @@ func createRoutingTestPolicy(t *testing.T, ctx context.Context, st *store.Store,
 		Name:       name,
 		MatchModel: matchModel,
 		Strategy:   "single",
+		Config:     json.RawMessage(`{}`),
 		Status:     "active",
 		CreatedAt:  now,
 		UpdatedAt:  now,
@@ -265,6 +267,7 @@ func createRoutingTestFallbackPolicy(t *testing.T, ctx context.Context, st *stor
 		Name:       name,
 		MatchModel: matchModel,
 		Strategy:   "fallback",
+		Config:     json.RawMessage(`{}`),
 		Status:     "active",
 		CreatedAt:  now,
 		UpdatedAt:  now,
