@@ -11,6 +11,7 @@ import { CachePage } from "../routes/CachePage";
 import { DashboardPage } from "../routes/DashboardPage";
 import { LoginPage } from "../routes/LoginPage";
 import { ModelsPage } from "../routes/ModelsPage";
+import { PoliciesPage } from "../routes/PoliciesPage";
 import { ProvidersPage } from "../routes/ProvidersPage";
 import { RequestLogsPage } from "../routes/RequestLogsPage";
 import { RoutePoliciesPage } from "../routes/RoutePoliciesPage";
@@ -53,6 +54,7 @@ export default function HomePage() {
       {activePage === "providers" && <ProvidersPage client={client} />}
       {activePage === "models" && <ModelsPage client={client} />}
       {activePage === "route-policies" && <RoutePoliciesPage client={client} />}
+      {activePage === "policies" && <PoliciesPage client={client} />}
       {activePage === "budgets" && <BudgetsPage client={client} />}
       {activePage === "budget-alerts" && <BudgetAlertsPage client={client} />}
       {activePage === "audit-logs" && <AuditLogsPage client={client} />}

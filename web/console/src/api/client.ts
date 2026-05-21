@@ -11,9 +11,11 @@ import type {
   BudgetAlertDelivery,
   BudgetStatus,
   CacheEvent,
+  ContentPolicy,
   CreateAPIKeyRequest,
   CreateBudgetAlertRequest,
   CreateBudgetRequest,
+  CreateContentPolicyRequest,
   CreateModelRequest,
   CreateProviderRequest,
   CreateRoutePolicyRequest,
@@ -128,6 +130,13 @@ export function createApiClient(options: ApiClientOptions) {
       request<ListResponse<AdminAuditLog>>("/api/v1/admin/audit-logs"),
     listCacheEvents: (query = "") =>
       request<ListResponse<CacheEvent>>(`/api/v1/admin/cache-events${query}`),
+    listContentPolicies: () =>
+      request<ListResponse<ContentPolicy>>("/api/v1/admin/content-policies"),
+    createContentPolicy: (body: CreateContentPolicyRequest) =>
+      request<ContentPolicy>("/api/v1/admin/content-policies", {
+        method: "POST",
+        body: JSON.stringify(body)
+      }),
     listRequestLogs: (query = "") =>
       request<RequestLogsResponse>(`/api/v1/admin/request-logs${query}`),
     usageSummary: (query = "") =>

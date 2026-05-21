@@ -112,3 +112,34 @@ test("creates budget alert without exposing secret in response", async () => {
   assert.equal(created.webhook_url, "https://example.com/hook");
   assert.equal("webhook_secret" in created, false);
 });
+
+test("creates content policy", async () => {
+  const calls = [];
+  const client = createApiClient({
+    baseUrl: "http://gateway.test",
+    getToken: () => "llmgw_admin_test",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return new Response(
+        JSON.stringify({
+          id: "00000000-0000-0000-0000-000000000033",
+          name: "redact-pii",
+          pii_action: "redact",
+          status: "active",
+          created_at: "2026-05-21T00:00:00Z"
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  });
+
+  const created = await client.createContentPolicy({
+    name: "redact-pii",
+    pii_action: "redact"
+  });
+
+  assert.equal(calls[0].url, "http://gateway.test/api/v1/admin/content-policies");
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(JSON.parse(calls[0].init.body).pii_action, "redact");
+  assert.equal(created.pii_action, "redact");
+});

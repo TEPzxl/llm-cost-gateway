@@ -201,6 +201,19 @@ export type CacheEvent = {
   created_at: string;
 };
 
+export type ContentPolicy = {
+  id: ID;
+  name: string;
+  pii_action: "allow" | "redact" | "block" | string;
+  status: string;
+  created_at: string;
+};
+
+export type CreateContentPolicyRequest = {
+  name: string;
+  pii_action: "allow" | "redact" | "block";
+};
+
 export type RequestLog = {
   id: ID;
   api_key_id?: ID | null;
