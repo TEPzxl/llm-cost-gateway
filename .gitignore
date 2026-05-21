@@ -13,3 +13,4 @@ out/
 .env
 .demo.env
 coverage/
+.loadtest/

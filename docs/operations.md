@@ -127,6 +127,16 @@ go run ./cmd/secret-rotate -config configs/config.example.yaml -dry-run
 
 确认结果后去掉 `-dry-run` 执行实际 re-encryption。详细流程见 `docs/runbooks/secret-rotation.md`。
 
+## Load Test
+
+本地 baseline 压测：
+
+```bash
+LOAD_TEST_SCENARIO=baseline LOAD_TEST_REQUESTS=20 LOAD_TEST_VUS=2 make load-test
+```
+
+报告会写入 `.loadtest/`。详细流程见 `docs/runbooks/load-testing.md`。
+
 ## Console
 
 Docker Compose 启动后，管理后台地址为：
