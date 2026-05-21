@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tep/llm-cost-gateway/internal/auth"
 	promptcache "github.com/tep/llm-cost-gateway/internal/cache"
+	"github.com/tep/llm-cost-gateway/internal/embedding"
 	"github.com/tep/llm-cost-gateway/internal/observability"
 	"github.com/tep/llm-cost-gateway/internal/ratelimit"
 	"github.com/tep/llm-cost-gateway/internal/store"
@@ -706,6 +707,100 @@ func TestGatewayChatCompletionsStreamSkipsExactCache(t *testing.T) {
 	assertAppCacheEventCount(t, ctx, st, "skip", 1)
 }
 
+func TestGatewayChatCompletionsSemanticCacheHitSkipsProvider(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouterWithSemanticCache(t, 0.99, 0.3)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		writeAppOpenAIChatResponse(t, w)
+	}))
+	defer server.Close()
+
+	provider, model := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "semantic-chat", server.URL, 1000)
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "semantic-chat-policy",
+		MatchModel: "semantic-chat",
+		Strategy:   "single",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: provider.ID, ModelID: model.ID, Priority: 1, Weight: 100},
+		},
+	})
+
+	_ = decodeGatewayChatResponse(t, performChatCompletion(t, router, apiKey.Key, `{"model":"semantic-chat","messages":[{"role":"user","content":"Hello, world!"}],"temperature":0.1}`))
+	second := decodeGatewayChatResponse(t, performChatCompletion(t, router, apiKey.Key, `{"model":"semantic-chat","messages":[{"role":"user","content":"hello world"}],"temperature":0.1}`))
+	if second.Cost.TotalCostMicro != 0 {
+		t.Fatalf("second cost = %d, want semantic cache hit cost 0", second.Cost.TotalCostMicro)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("provider calls = %d, want 1", got)
+	}
+	assertAppTableCount(t, ctx, st, "request_logs", 2)
+	assertAppTableCount(t, ctx, st, "usage_records", 1)
+	assertAppTableCount(t, ctx, st, "cost_records", 1)
+	assertAppCacheEventCount(t, ctx, st, "semantic_miss", 1)
+	assertAppCacheEventCount(t, ctx, st, "semantic_store", 1)
+	assertAppCacheEventCount(t, ctx, st, "semantic_hit", 1)
+	assertAppLatestRequestLogCacheStatus(t, ctx, st, "semantic_hit")
+}
+
+func TestGatewayChatCompletionsSemanticCacheDissimilarMiss(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouterWithSemanticCache(t, 0.9, 0.3)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		writeAppOpenAIChatResponse(t, w)
+	}))
+	defer server.Close()
+
+	provider, model := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "semantic-miss", server.URL, 1000)
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "semantic-miss-policy",
+		MatchModel: "semantic-miss",
+		Strategy:   "single",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: provider.ID, ModelID: model.ID, Priority: 1, Weight: 100},
+		},
+	})
+
+	_ = decodeGatewayChatResponse(t, performChatCompletion(t, router, apiKey.Key, `{"model":"semantic-miss","messages":[{"role":"user","content":"hello world"}],"temperature":0.1}`))
+	_ = decodeGatewayChatResponse(t, performChatCompletion(t, router, apiKey.Key, `{"model":"semantic-miss","messages":[{"role":"user","content":"goodbye mars"}],"temperature":0.1}`))
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("provider calls = %d, want 2 for dissimilar requests", got)
+	}
+	assertAppCacheEventCount(t, ctx, st, "semantic_miss", 2)
+	assertAppCacheEventCount(t, ctx, st, "semantic_hit", 0)
+}
+
+func TestGatewayChatCompletionsSemanticCacheSkipsHighTemperature(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouterWithSemanticCache(t, 0.9, 0.3)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		writeAppOpenAIChatResponse(t, w)
+	}))
+	defer server.Close()
+
+	provider, model := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "semantic-temp", server.URL, 1000)
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "semantic-temp-policy",
+		MatchModel: "semantic-temp",
+		Strategy:   "single",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: provider.ID, ModelID: model.ID, Priority: 1, Weight: 100},
+		},
+	})
+
+	_ = decodeGatewayChatResponse(t, performChatCompletion(t, router, apiKey.Key, `{"model":"semantic-temp","messages":[{"role":"user","content":"hello world"}],"temperature":0.9}`))
+	_ = decodeGatewayChatResponse(t, performChatCompletion(t, router, apiKey.Key, `{"model":"semantic-temp","messages":[{"role":"user","content":"hello world"}],"temperature":0.9}`))
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("provider calls = %d, want 2 for high temperature skip", got)
+	}
+	assertAppCacheEventCount(t, ctx, st, "semantic_skip", 2)
+}
+
 type fakeGatewayLimiter struct {
 	decision ratelimit.Decision
 	err      error
@@ -735,11 +830,28 @@ func newGatewayChatTestRouterWithPromptCache(t *testing.T) (*gin.Engine, *store.
 	return newGatewayChatTestRouterWithOptions(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}}, nil, promptCache)
 }
 
+func newGatewayChatTestRouterWithSemanticCache(t *testing.T, threshold float64, maxTemp float64) (*gin.Engine, *store.Store, gatewayChatFixture) {
+	t.Helper()
+
+	ctx := context.Background()
+	redisClient := testutil.OpenRedis(t, ctx)
+	semanticCache := promptcache.NewSemanticCache(redisClient, time.Minute)
+	return newGatewayChatTestRouterWithSemanticOptions(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}}, nil, semanticCache, threshold, maxTemp)
+}
+
 func newGatewayChatTestRouterWithMetrics(t *testing.T, limiter fakeGatewayLimiter, metrics *observability.Metrics) (*gin.Engine, *store.Store, gatewayChatFixture) {
 	return newGatewayChatTestRouterWithOptions(t, limiter, metrics, nil)
 }
 
 func newGatewayChatTestRouterWithOptions(t *testing.T, limiter fakeGatewayLimiter, metrics *observability.Metrics, promptCache *promptcache.PromptCache) (*gin.Engine, *store.Store, gatewayChatFixture) {
+	return newGatewayChatTestRouterWithFullOptions(t, limiter, metrics, promptCache, nil, 0, 0)
+}
+
+func newGatewayChatTestRouterWithSemanticOptions(t *testing.T, limiter fakeGatewayLimiter, metrics *observability.Metrics, semanticCache *promptcache.SemanticCache, threshold float64, maxTemp float64) (*gin.Engine, *store.Store, gatewayChatFixture) {
+	return newGatewayChatTestRouterWithFullOptions(t, limiter, metrics, nil, semanticCache, threshold, maxTemp)
+}
+
+func newGatewayChatTestRouterWithFullOptions(t *testing.T, limiter fakeGatewayLimiter, metrics *observability.Metrics, promptCache *promptcache.PromptCache, semanticCache *promptcache.SemanticCache, threshold float64, maxTemp float64) (*gin.Engine, *store.Store, gatewayChatFixture) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -758,6 +870,10 @@ func newGatewayChatTestRouterWithOptions(t *testing.T, limiter fakeGatewayLimite
 		RateLimiter:            limiter,
 		Metrics:                metrics,
 		PromptCache:            promptCache,
+		SemanticCache:          semanticCache,
+		EmbeddingAdapter:       embedding.NewMockAdapter(),
+		SemanticCacheThreshold: threshold,
+		SemanticCacheMaxTemp:   maxTemp,
 	}, zap.NewNop())
 
 	orgID := createOrgViaHTTP(t, router, "Gateway Org", "gateway-org-"+uuid.NewString())

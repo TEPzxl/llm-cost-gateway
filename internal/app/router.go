@@ -8,6 +8,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/budget"
 	promptcache "github.com/tep/llm-cost-gateway/internal/cache"
 	"github.com/tep/llm-cost-gateway/internal/costing"
+	"github.com/tep/llm-cost-gateway/internal/embedding"
 	"github.com/tep/llm-cost-gateway/internal/events"
 	gatewayservice "github.com/tep/llm-cost-gateway/internal/gateway"
 	"github.com/tep/llm-cost-gateway/internal/http/handlers/admin"
@@ -36,6 +37,10 @@ type RouterConfig struct {
 	UsageEventPublisher    events.Publisher
 	UsageAnalytics         *analytics.UsageAnalyticsService
 	PromptCache            *promptcache.PromptCache
+	SemanticCache          *promptcache.SemanticCache
+	EmbeddingAdapter       embedding.Adapter
+	SemanticCacheThreshold float64
+	SemanticCacheMaxTemp   float64
 	Logger                 *zap.Logger
 }
 
@@ -90,6 +95,7 @@ func registerGatewayRoutes(router *gin.Engine, cfg RouterConfig) {
 		gatewayservice.WithUsageEventPublisher(cfg.UsageEventPublisher),
 		gatewayservice.WithUsageAnalyticsSink(cfg.UsageAnalytics),
 		gatewayservice.WithPromptCache(cfg.PromptCache),
+		gatewayservice.WithSemanticCache(cfg.SemanticCache, cfg.EmbeddingAdapter, cfg.SemanticCacheThreshold, cfg.SemanticCacheMaxTemp),
 		gatewayservice.WithLogger(cfg.Logger),
 	)
 	chatHandler := gatewayhandler.NewChatCompletionsHandler(chatService)

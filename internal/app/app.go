@@ -11,6 +11,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/analytics"
 	promptcache "github.com/tep/llm-cost-gateway/internal/cache"
 	"github.com/tep/llm-cost-gateway/internal/config"
+	"github.com/tep/llm-cost-gateway/internal/embedding"
 	"github.com/tep/llm-cost-gateway/internal/events"
 	"github.com/tep/llm-cost-gateway/internal/http/middleware"
 	"github.com/tep/llm-cost-gateway/internal/observability"
@@ -78,6 +79,10 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 		UsageEventPublisher:    usageEventPublisher,
 		UsageAnalytics:         usageAnalytics,
 		PromptCache:            newPromptCache(cfg, redisClient),
+		SemanticCache:          newSemanticCache(cfg, redisClient),
+		EmbeddingAdapter:       embedding.NewMockAdapter(),
+		SemanticCacheThreshold: cfg.SemanticCacheThreshold,
+		SemanticCacheMaxTemp:   cfg.SemanticCacheMaxTemp,
 	}, logger)
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.ServerPort),
@@ -100,6 +105,13 @@ func newPromptCache(cfg Config, redisClient redis.Cmdable) *promptcache.PromptCa
 		return nil
 	}
 	return promptcache.NewPromptCache(redisClient, time.Duration(cfg.PromptCacheTTLSeconds)*time.Second)
+}
+
+func newSemanticCache(cfg Config, redisClient redis.Cmdable) *promptcache.SemanticCache {
+	if !cfg.SemanticCacheEnabled || redisClient == nil {
+		return nil
+	}
+	return promptcache.NewSemanticCache(redisClient, time.Duration(cfg.PromptCacheTTLSeconds)*time.Second)
 }
 
 func newUsageEventPublisher(cfg Config) (events.Publisher, io.Closer, error) {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/costing"
 	secretcrypto "github.com/tep/llm-cost-gateway/internal/crypto"
 	"github.com/tep/llm-cost-gateway/internal/domain"
+	"github.com/tep/llm-cost-gateway/internal/embedding"
 	"github.com/tep/llm-cost-gateway/internal/events"
 	"github.com/tep/llm-cost-gateway/internal/metering"
 	"github.com/tep/llm-cost-gateway/internal/observability"
@@ -46,6 +48,10 @@ type ChatService struct {
 	usageEvents         events.Publisher
 	usageAnalytics      analytics.Sink
 	promptCache         *promptcache.PromptCache
+	semanticCache       *promptcache.SemanticCache
+	embedding           embedding.Adapter
+	semanticThreshold   float64
+	semanticMaxTemp     float64
 	logger              *zap.Logger
 }
 
@@ -78,6 +84,15 @@ func WithUsageAnalyticsSink(sink analytics.Sink) ChatServiceOption {
 func WithPromptCache(cache *promptcache.PromptCache) ChatServiceOption {
 	return func(s *ChatService) {
 		s.promptCache = cache
+	}
+}
+
+func WithSemanticCache(cache *promptcache.SemanticCache, adapter embedding.Adapter, threshold float64, maxTemperature float64) ChatServiceOption {
+	return func(s *ChatService) {
+		s.semanticCache = cache
+		s.embedding = adapter
+		s.semanticThreshold = threshold
+		s.semanticMaxTemp = maxTemperature
 	}
 }
 
@@ -155,6 +170,14 @@ type cacheEventInput struct {
 	Reason         string
 }
 
+type semanticCacheCandidate struct {
+	enabled      bool
+	skipReason   string
+	cacheKeyHash string
+	messagesHash string
+	embedding    []float64
+}
+
 func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observability.Metrics, retryPolicy RetryPolicy, opts ...ChatServiceOption) *ChatService {
 	service := &ChatService{
 		store:               st,
@@ -170,6 +193,8 @@ func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observ
 		clock:               func() time.Time { return time.Now().UTC() },
 		usageEvents:         events.DisabledPublisher{},
 		usageAnalytics:      analytics.DisabledSink{},
+		semanticThreshold:   0.92,
+		semanticMaxTemp:     0.3,
 		logger:              zap.NewNop(),
 	}
 	for _, opt := range opts {
@@ -262,6 +287,24 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 			})
 			s.logger.Warn("prompt cache read failed", zap.Error(err), zap.String("request_id", input.RequestID.String()))
 		}
+	}
+	semanticCandidate := s.semanticCacheCandidate(ctx, input, request, cacheKey)
+	if semanticCandidate.enabled {
+		if match, err := s.semanticCache.Lookup(ctx, promptcache.SemanticLookupInput{
+			OrgID:          input.Principal.OrgID,
+			RequestedModel: request.Model,
+			Embedding:      semanticCandidate.embedding,
+			Threshold:      s.semanticThreshold,
+		}); err == nil {
+			return s.respondFromSemanticCache(ctx, input, request, resolved, match, budgetCheck, quotaCheck, startedAt)
+		} else if errors.Is(err, promptcache.ErrSemanticCacheMiss) {
+			s.recordSemanticCacheEvent(ctx, input.Principal.OrgID, nil, "semantic_miss", request.Model, semanticCandidate.cacheKeyHash, semanticCandidate.messagesHash, "")
+		} else {
+			s.recordSemanticCacheEvent(ctx, input.Principal.OrgID, nil, "semantic_read_error", request.Model, semanticCandidate.cacheKeyHash, semanticCandidate.messagesHash, "redis_error")
+			s.logger.Warn("semantic cache read failed", zap.Error(err), zap.String("request_id", input.RequestID.String()))
+		}
+	} else if semanticCandidate.skipReason != "" {
+		s.recordSemanticCacheEvent(ctx, input.Principal.OrgID, nil, "semantic_skip", request.Model, semanticCandidate.cacheKeyHash, semanticCandidate.messagesHash, semanticCandidate.skipReason)
 	}
 	var attempts []providerAttemptMetadata
 	var selected routing.ResolvedTarget
@@ -408,6 +451,29 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 			})
 		}
 	}
+	if semanticCandidate.enabled {
+		match, err := s.semanticCache.Store(ctx, promptcache.SemanticStoreInput{
+			OrgID:          input.Principal.OrgID,
+			RequestedModel: request.Model,
+			MessagesHash:   semanticCandidate.messagesHash,
+			Embedding:      semanticCandidate.embedding,
+			Response: promptcache.CachedChatResponse{
+				ProviderID:    selected.Provider.ID,
+				ModelID:       selected.Model.ID,
+				ProviderName:  selected.Provider.Name,
+				ProviderModel: selected.Model.ProviderModelName,
+				Role:          providerResponse.Role,
+				Content:       providerResponse.Content,
+				FinishReason:  providerResponse.FinishReason,
+			},
+		})
+		if err != nil {
+			s.recordSemanticCacheEvent(ctx, input.Principal.OrgID, &metered.RequestLog.ID, "semantic_write_error", request.Model, semanticCandidate.cacheKeyHash, semanticCandidate.messagesHash, "redis_error")
+			s.logger.Warn("semantic cache write failed", zap.Error(err), zap.String("request_id", input.RequestID.String()))
+		} else {
+			s.recordSemanticCacheEvent(ctx, input.Principal.OrgID, &metered.RequestLog.ID, "semantic_store", request.Model, match.CacheKeyHash, match.MessagesHash, "")
+		}
+	}
 	_, _ = s.alerts.CheckAndDeliver(ctx, input.Principal.OrgID)
 	statusLabel := "success"
 	if budgetCheck.Warning {
@@ -451,6 +517,44 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	return ChatResult{Response: response}, nil
 }
 
+func (s *ChatService) respondFromSemanticCache(ctx context.Context, input ChatInput, request ChatCompletionRequest, resolved routing.ResolveTargetsResult, match promptcache.SemanticMatch, budgetCheck budget.CheckResult, quotaCheck auth.APIKeyQuotaCheckResult, startedAt time.Time) (ChatResult, error) {
+	target := resolved.Targets[0]
+	status := metering.StatusSuccess
+	if budgetCheck.Warning {
+		status = metering.StatusBudgetWarned
+	}
+	metadata := withSemanticCacheMetadata(chatMetadata(budgetCheck, quotaCheck, nil, false, false), "semantic_hit", match.CacheKeyHash, match.Similarity)
+	requestLog, err := s.metering.RecordCacheHit(ctx, metering.RecordCacheHitInput{
+		RequestID:     input.RequestID,
+		OrgID:         input.Principal.OrgID,
+		APIKeyID:      input.Principal.APIKeyID,
+		ProviderID:    target.Provider.ID,
+		ModelID:       target.Model.ID,
+		RoutePolicyID: &resolved.RoutePolicy.ID,
+		Method:        input.Method,
+		Path:          input.Path,
+		RequestModel:  request.Model,
+		Status:        status,
+		StatusCode:    http.StatusOK,
+		RequestHash:   hashBytes(input.RawBody),
+		ResponseHash:  hashBytes([]byte(match.Response.Content)),
+		LatencyMS:     int32(s.clock().Sub(startedAt).Milliseconds()),
+		Metadata:      metadata,
+		StartedAt:     startedAt,
+		CompletedAt:   s.clock(),
+	})
+	if err != nil {
+		return ChatResult{}, err
+	}
+	s.recordSemanticCacheEvent(ctx, input.Principal.OrgID, &requestLog.ID, "semantic_hit", request.Model, match.CacheKeyHash, match.MessagesHash, "")
+	statusLabel := "success"
+	if budgetCheck.Warning {
+		statusLabel = metering.StatusBudgetWarned
+	}
+	s.metrics.ObserveGatewayRequest(statusLabel, target.Provider.Name, request.Model, s.clock().Sub(startedAt))
+	return ChatResult{Response: cachedChatResponse(input.RequestID, request.Model, target, match.Response, s.clock())}, nil
+}
+
 func (s *ChatService) respondFromPromptCache(ctx context.Context, input ChatInput, request ChatCompletionRequest, resolved routing.ResolveTargetsResult, cached promptcache.CachedChatResponse, cacheKey promptcache.PromptKey, budgetCheck budget.CheckResult, quotaCheck auth.APIKeyQuotaCheckResult, startedAt time.Time) (ChatResult, error) {
 	target := resolved.Targets[0]
 	status := metering.StatusSuccess
@@ -492,11 +596,15 @@ func (s *ChatService) respondFromPromptCache(ctx context.Context, input ChatInpu
 		statusLabel = metering.StatusBudgetWarned
 	}
 	s.metrics.ObserveGatewayRequest(statusLabel, target.Provider.Name, request.Model, s.clock().Sub(startedAt))
-	return ChatResult{Response: ChatCompletionResponse{
-		ID:      "chatcmpl_" + input.RequestID.String(),
+	return ChatResult{Response: cachedChatResponse(input.RequestID, request.Model, target, cached, s.clock())}, nil
+}
+
+func cachedChatResponse(requestID uuid.UUID, requestedModel string, target routing.ResolvedTarget, cached promptcache.CachedChatResponse, now time.Time) ChatCompletionResponse {
+	return ChatCompletionResponse{
+		ID:      "chatcmpl_" + requestID.String(),
 		Object:  "chat.completion",
-		Created: s.clock().Unix(),
-		Model:   request.Model,
+		Created: now.Unix(),
+		Model:   requestedModel,
 		Provider: ProviderBody{
 			ID:    target.Provider.ID,
 			Name:  target.Provider.Name,
@@ -521,8 +629,8 @@ func (s *ChatService) respondFromPromptCache(ctx context.Context, input ChatInpu
 			Currency:       "USD",
 			TotalCostMicro: 0,
 		},
-		RequestID: input.RequestID,
-	}}, nil
+		RequestID: requestID,
+	}
 }
 
 func (s *ChatService) promptCacheKey(request ChatCompletionRequest, orgID uuid.UUID) (promptcache.PromptKey, bool) {
@@ -540,6 +648,46 @@ func (s *ChatService) promptCacheKey(request ChatCompletionRequest, orgID uuid.U
 		return promptcache.PromptKey{}, false
 	}
 	return key, true
+}
+
+func (s *ChatService) semanticCacheCandidate(ctx context.Context, input ChatInput, request ChatCompletionRequest, promptKey promptcache.PromptKey) semanticCacheCandidate {
+	if s.semanticCache == nil || s.embedding == nil || request.Stream {
+		return semanticCacheCandidate{}
+	}
+	key := promptKey
+	if key.CacheKeyHash == "" {
+		built, err := promptcache.BuildPromptKey(promptcache.PromptKeyInput{
+			OrgID:          input.Principal.OrgID,
+			RequestedModel: request.Model,
+			Messages:       request.Messages,
+			Temperature:    request.Temperature,
+			MaxTokens:      request.MaxTokens,
+		})
+		if err != nil {
+			return semanticCacheCandidate{}
+		}
+		key = built
+	}
+	candidate := semanticCacheCandidate{
+		cacheKeyHash: key.CacheKeyHash,
+		messagesHash: key.MessagesHash,
+	}
+	if request.Temperature != nil && *request.Temperature > s.semanticMaxTemp {
+		candidate.skipReason = "high_temperature"
+		return candidate
+	}
+	if highRiskMessages(request.Messages) {
+		candidate.skipReason = "high_risk"
+		return candidate
+	}
+	vector, err := s.embedding.Embed(ctx, messagesText(request.Messages))
+	if err != nil {
+		candidate.skipReason = "embedding_error"
+		return candidate
+	}
+	candidate.enabled = true
+	candidate.embedding = vector
+	return candidate
 }
 
 func (s *ChatService) recordPromptCacheSkip(ctx context.Context, input ChatInput, request ChatCompletionRequest, reason string) {
@@ -563,6 +711,49 @@ func (s *ChatService) recordPromptCacheSkip(ctx context.Context, input ChatInput
 		CacheKey:       key,
 		Reason:         reason,
 	})
+}
+
+func (s *ChatService) recordSemanticCacheEvent(ctx context.Context, orgID uuid.UUID, requestLogID *uuid.UUID, eventType string, requestedModel string, cacheKeyHash string, messagesHash string, reason string) {
+	if orgID == uuid.Nil || cacheKeyHash == "" || messagesHash == "" || requestedModel == "" {
+		return
+	}
+	_, err := s.store.Queries.InsertCacheEvent(ctx, db.InsertCacheEventParams{
+		ID:             uuid.New(),
+		OrgID:          orgID,
+		RequestLogID:   requestLogID,
+		EventType:      eventType,
+		RequestedModel: requestedModel,
+		CacheKeyHash:   cacheKeyHash,
+		MessagesHash:   messagesHash,
+		Reason:         pgText(reason),
+		CreatedAt:      s.clock(),
+	})
+	if err != nil {
+		s.logger.Warn("record semantic cache event failed", zap.Error(err), zap.String("event_type", eventType))
+	}
+}
+
+func messagesText(messages []contract.ChatMessage) string {
+	var builder strings.Builder
+	for _, message := range messages {
+		if builder.Len() > 0 {
+			builder.WriteByte('\n')
+		}
+		builder.WriteString(message.Role)
+		builder.WriteByte(':')
+		builder.WriteString(message.Content)
+	}
+	return builder.String()
+}
+
+func highRiskMessages(messages []contract.ChatMessage) bool {
+	text := strings.ToLower(messagesText(messages))
+	for _, marker := range []string{"password", "api key", "secret", "credit card", "ssn"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *ChatService) recordFailure(ctx context.Context, input ChatInput, requestModel string, status string, statusCode int, errorCode string, responseHash string, providerID *uuid.UUID, modelID *uuid.UUID, metadata *json.RawMessage, startedAt time.Time) error {
@@ -793,6 +984,24 @@ func withCacheMetadata(existing *json.RawMessage, status string, cacheKeyHash st
 	body["cache"] = map[string]any{
 		"status":         status,
 		"cache_key_hash": cacheKeyHash,
+	}
+	rawBody, err := json.Marshal(body)
+	if err != nil {
+		return existing
+	}
+	raw := json.RawMessage(rawBody)
+	return &raw
+}
+
+func withSemanticCacheMetadata(existing *json.RawMessage, status string, cacheKeyHash string, similarity float64) *json.RawMessage {
+	body := map[string]any{}
+	if existing != nil && len(*existing) > 0 {
+		_ = json.Unmarshal(*existing, &body)
+	}
+	body["cache"] = map[string]any{
+		"status":         status,
+		"cache_key_hash": cacheKeyHash,
+		"similarity":     similarity,
 	}
 	rawBody, err := json.Marshal(body)
 	if err != nil {
