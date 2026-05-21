@@ -3,6 +3,7 @@ package app
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/tep/llm-cost-gateway/internal/analytics"
+	"github.com/tep/llm-cost-gateway/internal/anomaly"
 	"github.com/tep/llm-cost-gateway/internal/audit"
 	"github.com/tep/llm-cost-gateway/internal/auth"
 	"github.com/tep/llm-cost-gateway/internal/budget"
@@ -128,6 +129,7 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	routePolicyService := routing.NewService(cfg.Store)
 	budgetService := budget.NewService(cfg.Store.Queries)
 	budgetAlertService := budget.NewAlertService(cfg.Store)
+	anomalyService := anomaly.NewService(cfg.Store)
 	auditService := audit.NewAdminAuditService(cfg.Store.Queries)
 	contentPolicyService := policy.NewService(cfg.Store)
 	meHandler := admin.NewMeHandler(cfg.Store.Queries)
@@ -138,6 +140,7 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	routePolicyHandler := admin.NewRoutePolicyHandler(routePolicyService)
 	budgetHandler := admin.NewBudgetHandler(budgetService)
 	budgetAlertHandler := admin.NewBudgetAlertHandler(budgetAlertService)
+	anomalyPolicyHandler := admin.NewAnomalyPolicyHandler(anomalyService)
 	auditHandler := admin.NewAuditHandler(auditService)
 	sessionHandler := admin.NewSessionHandler(sessionService)
 	membersHandler := admin.NewMembersHandler(sessionService)
@@ -181,6 +184,8 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	configGroup.POST("/budget-alerts", budgetAlertHandler.Create)
 	configGroup.GET("/budget-alerts", budgetAlertHandler.List)
 	configGroup.GET("/budget-alert-deliveries", budgetAlertHandler.ListDeliveries)
+	configGroup.POST("/anomaly-policies", anomalyPolicyHandler.Create)
+	configGroup.GET("/anomaly-policies", anomalyPolicyHandler.List)
 	configGroup.POST("/content-policies", contentPolicyHandler.Create)
 	configGroup.GET("/content-policies", contentPolicyHandler.List)
 

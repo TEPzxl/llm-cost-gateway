@@ -14,6 +14,7 @@ const (
 	CodeBudgetExceeded       = "budget_exceeded"
 	CodeAPIKeyQuotaExceeded  = "api_key_quota_exceeded"
 	CodeContentPolicyBlocked = "content_policy_blocked"
+	CodeCostAnomalyBlocked   = "cost_anomaly_blocked"
 	CodeProviderError        = "provider_error"
 	CodeProviderUnavailable  = "provider_unavailable"
 	CodeProviderTimeout      = "provider_timeout"

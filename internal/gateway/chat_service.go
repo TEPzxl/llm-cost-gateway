@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/tep/llm-cost-gateway/internal/analytics"
+	"github.com/tep/llm-cost-gateway/internal/anomaly"
 	"github.com/tep/llm-cost-gateway/internal/auth"
 	"github.com/tep/llm-cost-gateway/internal/budget"
 	promptcache "github.com/tep/llm-cost-gateway/internal/cache"
@@ -43,6 +44,7 @@ type ChatService struct {
 	registry            *provider.Registry
 	budgets             *budget.Service
 	alerts              *budget.AlertService
+	anomalies           *anomaly.Service
 	apiKeyQuotas        *auth.APIKeyQuotaService
 	contentPolicies     *contentpolicy.Service
 	piiDetector         *contentpolicy.Detector
@@ -207,6 +209,7 @@ func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observ
 		registry:            provider.NewRegistry(),
 		budgets:             budget.NewService(st.Queries),
 		alerts:              budget.NewAlertService(st),
+		anomalies:           anomaly.NewService(st),
 		apiKeyQuotas:        auth.NewAPIKeyQuotaService(st.Queries),
 		contentPolicies:     contentpolicy.NewService(st),
 		piiDetector:         contentpolicy.NewDetector(),
@@ -307,6 +310,24 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 		s.metrics.ObserveGatewayRequest("api_key_quota_blocked", "", request.Model, s.clock().Sub(startedAt))
 		return ChatResult{}, domain.NewError(http.StatusPaymentRequired, domain.CodeAPIKeyQuotaExceeded, "api key quota exceeded")
 	}
+	anomalyDecision, err := s.anomalies.Evaluate(ctx, anomaly.EvaluateParams{
+		OrgID:          input.Principal.OrgID,
+		APIKeyID:       input.Principal.APIKeyID,
+		RequestedModel: request.Model,
+	})
+	if err != nil {
+		recordTracingError(span, domain.CodeInternalError, err)
+		return ChatResult{}, err
+	}
+	if anomalyDecision.Triggered && anomalyDecision.Action == anomaly.ActionBlock {
+		metadata := withContentPolicyMetadata(withAnomalyMetadata(chatMetadata(budgetCheck, quotaCheck, nil, false, false), anomalyDecision), contentDecision)
+		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusTooManyRequests, domain.CodeCostAnomalyBlocked, "", nil, nil, metadata, startedAt)
+		s.metrics.ObserveGatewayRequest("cost_anomaly_blocked", "", request.Model, s.clock().Sub(startedAt))
+		return ChatResult{}, domain.NewError(http.StatusTooManyRequests, domain.CodeCostAnomalyBlocked, "cost anomaly blocked")
+	}
+	if anomalyDecision.Triggered && anomalyDecision.Action == anomaly.ActionDowngrade {
+		request.Model = anomalyDecision.EffectiveModel
+	}
 
 	routingCtx, routingSpan := s.tracer.Start(ctx, "gateway.routing", trace.WithAttributes(
 		attribute.String("org_id", input.Principal.OrgID.String()),
@@ -337,7 +358,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	if cacheable {
 		if cached, err := s.promptCache.Get(ctx, cacheKey); err == nil {
 			spanStatus = "success"
-			return s.respondFromPromptCache(ctx, input, request, resolved, cached, cacheKey, budgetCheck, quotaCheck, contentDecision, startedAt)
+			return s.respondFromPromptCache(ctx, input, request, resolved, cached, cacheKey, budgetCheck, quotaCheck, anomalyDecision, contentDecision, startedAt)
 		} else if errors.Is(err, promptcache.ErrCacheMiss) {
 			s.recordCacheEvent(ctx, cacheEventInput{
 				OrgID:          input.Principal.OrgID,
@@ -365,7 +386,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 			Threshold:      s.semanticThreshold,
 		}); err == nil {
 			spanStatus = "success"
-			return s.respondFromSemanticCache(ctx, input, request, resolved, match, budgetCheck, quotaCheck, contentDecision, startedAt)
+			return s.respondFromSemanticCache(ctx, input, request, resolved, match, budgetCheck, quotaCheck, anomalyDecision, contentDecision, startedAt)
 		} else if errors.Is(err, promptcache.ErrSemanticCacheMiss) {
 			s.recordSemanticCacheEvent(ctx, input.Principal.OrgID, nil, "semantic_miss", request.Model, semanticCandidate.cacheKeyHash, semanticCandidate.messagesHash, "")
 		} else {
@@ -455,7 +476,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 			lastStatus = http.StatusServiceUnavailable
 			lastCode = domain.CodeProviderUnavailable
 		}
-		metadata := withContentPolicyMetadata(chatMetadata(budgetCheck, quotaCheck, attempts, includeFallbackMetadata, includeFallbackMetadata || hasRetriedTarget(attempts)), contentDecision)
+		metadata := withContentPolicyMetadata(withAnomalyMetadata(chatMetadata(budgetCheck, quotaCheck, attempts, includeFallbackMetadata, includeFallbackMetadata || hasRetriedTarget(attempts)), anomalyDecision), contentDecision)
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, lastStatus, lastCode, "", &selected.Provider.ID, &selected.Model.ID, metadata, startedAt)
 		s.metrics.ObserveGatewayRequest("error", selected.Provider.Name, request.Model, s.clock().Sub(startedAt))
 		return ChatResult{}, domain.NewError(lastStatus, lastCode, "provider request failed")
@@ -466,7 +487,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	if providerLatencyMS == 0 {
 		providerLatencyMS = int32(s.clock().Sub(providerStarted).Milliseconds())
 	}
-	metadata := withContentPolicyMetadata(chatMetadata(budgetCheck, quotaCheck, attempts, includeFallbackMetadata, includeFallbackMetadata || hasRetriedTarget(attempts)), contentDecision)
+	metadata := withContentPolicyMetadata(withAnomalyMetadata(chatMetadata(budgetCheck, quotaCheck, attempts, includeFallbackMetadata, includeFallbackMetadata || hasRetriedTarget(attempts)), anomalyDecision), contentDecision)
 	successStatus := metering.StatusSuccess
 	if budgetCheck.Warning {
 		successStatus = metering.StatusBudgetWarned
@@ -598,13 +619,13 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	return ChatResult{Response: response}, nil
 }
 
-func (s *ChatService) respondFromSemanticCache(ctx context.Context, input ChatInput, request ChatCompletionRequest, resolved routing.ResolveTargetsResult, match promptcache.SemanticMatch, budgetCheck budget.CheckResult, quotaCheck auth.APIKeyQuotaCheckResult, contentDecision contentPolicyDecision, startedAt time.Time) (ChatResult, error) {
+func (s *ChatService) respondFromSemanticCache(ctx context.Context, input ChatInput, request ChatCompletionRequest, resolved routing.ResolveTargetsResult, match promptcache.SemanticMatch, budgetCheck budget.CheckResult, quotaCheck auth.APIKeyQuotaCheckResult, anomalyDecision anomaly.Decision, contentDecision contentPolicyDecision, startedAt time.Time) (ChatResult, error) {
 	target := resolved.Targets[0]
 	status := metering.StatusSuccess
 	if budgetCheck.Warning {
 		status = metering.StatusBudgetWarned
 	}
-	metadata := withContentPolicyMetadata(withSemanticCacheMetadata(chatMetadata(budgetCheck, quotaCheck, nil, false, false), "semantic_hit", match.CacheKeyHash, match.Similarity), contentDecision)
+	metadata := withContentPolicyMetadata(withAnomalyMetadata(withSemanticCacheMetadata(chatMetadata(budgetCheck, quotaCheck, nil, false, false), "semantic_hit", match.CacheKeyHash, match.Similarity), anomalyDecision), contentDecision)
 	requestLog, err := s.metering.RecordCacheHit(ctx, metering.RecordCacheHitInput{
 		RequestID:     input.RequestID,
 		OrgID:         input.Principal.OrgID,
@@ -636,13 +657,13 @@ func (s *ChatService) respondFromSemanticCache(ctx context.Context, input ChatIn
 	return ChatResult{Response: cachedChatResponse(input.RequestID, request.Model, target, match.Response, s.clock())}, nil
 }
 
-func (s *ChatService) respondFromPromptCache(ctx context.Context, input ChatInput, request ChatCompletionRequest, resolved routing.ResolveTargetsResult, cached promptcache.CachedChatResponse, cacheKey promptcache.PromptKey, budgetCheck budget.CheckResult, quotaCheck auth.APIKeyQuotaCheckResult, contentDecision contentPolicyDecision, startedAt time.Time) (ChatResult, error) {
+func (s *ChatService) respondFromPromptCache(ctx context.Context, input ChatInput, request ChatCompletionRequest, resolved routing.ResolveTargetsResult, cached promptcache.CachedChatResponse, cacheKey promptcache.PromptKey, budgetCheck budget.CheckResult, quotaCheck auth.APIKeyQuotaCheckResult, anomalyDecision anomaly.Decision, contentDecision contentPolicyDecision, startedAt time.Time) (ChatResult, error) {
 	target := resolved.Targets[0]
 	status := metering.StatusSuccess
 	if budgetCheck.Warning {
 		status = metering.StatusBudgetWarned
 	}
-	metadata := withContentPolicyMetadata(withCacheMetadata(chatMetadata(budgetCheck, quotaCheck, nil, false, false), "hit", cacheKey.CacheKeyHash), contentDecision)
+	metadata := withContentPolicyMetadata(withAnomalyMetadata(withCacheMetadata(chatMetadata(budgetCheck, quotaCheck, nil, false, false), "hit", cacheKey.CacheKeyHash), anomalyDecision), contentDecision)
 	requestLog, err := s.metering.RecordCacheHit(ctx, metering.RecordCacheHitInput{
 		RequestID:     input.RequestID,
 		OrgID:         input.Principal.OrgID,
@@ -1114,6 +1135,24 @@ func withSemanticCacheMetadata(existing *json.RawMessage, status string, cacheKe
 		"cache_key_hash": cacheKeyHash,
 		"similarity":     similarity,
 	}
+	rawBody, err := json.Marshal(body)
+	if err != nil {
+		return existing
+	}
+	raw := json.RawMessage(rawBody)
+	return &raw
+}
+
+func withAnomalyMetadata(existing *json.RawMessage, decision anomaly.Decision) *json.RawMessage {
+	bodyPart := decision.MetadataBody()
+	if bodyPart == nil {
+		return existing
+	}
+	body := map[string]any{}
+	if existing != nil && len(*existing) > 0 {
+		_ = json.Unmarshal(*existing, &body)
+	}
+	body["cost_anomaly"] = bodyPart
 	rawBody, err := json.Marshal(body)
 	if err != nil {
 		return existing
