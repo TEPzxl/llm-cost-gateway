@@ -1,0 +1,22 @@
+groups:
+  - name: llm-cost-gateway.pipeline
+    rules:
+      - alert: LLMUsageEventPublishFailures
+        expr: increase(llmgw_usage_event_publish_failed_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Usage event publishing failed
+          description: Kafka usage event publish failures were observed.
+          runbook_url: docs/runbooks/alerts.md#llmusageeventpublishfailures
+
+      - alert: LLMAnalyticsWriteFailures
+        expr: increase(llmgw_analytics_write_failed_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Analytics writes failed
+          description: ClickHouse or analytics sink write failures were observed.
+          runbook_url: docs/runbooks/alerts.md#llmanalyticswritefailures

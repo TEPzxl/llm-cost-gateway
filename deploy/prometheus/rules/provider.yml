@@ -1,0 +1,22 @@
+groups:
+  - name: llm-cost-gateway.provider
+    rules:
+      - alert: LLMProviderErrorSpike
+        expr: sum(rate(llmgw_provider_errors_total[5m])) by (provider, code) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Provider error rate is elevated
+          description: Provider {{ $labels.provider }} error code {{ $labels.code }} exceeded 0.05 rps.
+          runbook_url: docs/runbooks/alerts.md#llmprovidererrorspike
+
+      - alert: LLMProviderNoSuccessfulRequests
+        expr: sum(rate(llmgw_provider_requests_total{status="success"}[10m])) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: No successful provider requests observed
+          description: No successful provider requests were observed for 15 minutes.
+          runbook_url: docs/runbooks/alerts.md#llmprovidernosuccessfulrequests

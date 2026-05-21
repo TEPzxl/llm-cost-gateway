@@ -119,6 +119,7 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
     volumes:
       - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/rules:/etc/prometheus/rules:ro
     ports:
       - "9090:9090"
     depends_on:

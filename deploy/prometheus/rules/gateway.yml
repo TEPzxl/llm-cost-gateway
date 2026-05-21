@@ -1,0 +1,42 @@
+groups:
+  - name: llm-cost-gateway.gateway
+    rules:
+      - alert: LLMGatewayHigh5xxRate
+        expr: sum(rate(llmgw_requests_total{status="error"}[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Gateway 5xx/error rate is elevated
+          description: Gateway error requests exceeded 0.05 rps for 10 minutes.
+          runbook_url: docs/runbooks/alerts.md#llmgatewayhigh5xxrate
+
+      - alert: LLMGatewayHighLatencyP95
+        expr: histogram_quantile(0.95, sum(rate(llmgw_request_duration_seconds_bucket[5m])) by (le)) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Gateway p95 latency is elevated
+          description: Gateway p95 latency exceeded 2 seconds for 10 minutes.
+          runbook_url: docs/runbooks/alerts.md#llmgatewayhighlatencyp95
+
+      - alert: LLMGatewayRateLimitSpike
+        expr: increase(llmgw_rate_limited_total[5m]) > 50
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: Rate limited request count spiked
+          description: More than 50 requests were rate limited within 5 minutes.
+          runbook_url: docs/runbooks/alerts.md#llmgatewayratelimitspike
+
+      - alert: LLMGatewayBudgetBlockSpike
+        expr: increase(llmgw_budget_blocked_total[5m]) > 20
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: Budget blocked request count spiked
+          description: More than 20 requests were blocked by budget policy within 5 minutes.
+          runbook_url: docs/runbooks/alerts.md#llmgatewaybudgetblockspike

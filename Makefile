@@ -1,4 +1,4 @@
-.PHONY: up down migrate-up migrate-down verify-migration seed-demo smoke-test load-test sqlc-generate test run secret-rotate console-install console-build
+.PHONY: up down migrate-up migrate-down verify-migration verify-alert-rules seed-demo smoke-test load-test sqlc-generate test run secret-rotate console-install console-build
 
 CONFIG_FILE ?= configs/config.example.yaml
 COMPOSE ?= docker compose -f deploy/docker-compose.yml --project-directory .
@@ -18,6 +18,9 @@ migrate-down:
 
 verify-migration:
 	./scripts/verify-migration-constraints.sh
+
+verify-alert-rules:
+	./scripts/verify-alert-rules.sh
 
 seed-demo:
 	./scripts/seed-demo.sh
