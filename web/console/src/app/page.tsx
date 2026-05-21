@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createApiClient } from "../api/client";
 import type { AdminMe } from "../api/types";
 import { canAccessPage, Layout, type ConsolePage } from "../components/Layout";
+import { AnomalyPoliciesPage } from "../routes/AnomalyPoliciesPage";
 import { APIKeysPage } from "../routes/APIKeysPage";
 import { AuditLogsPage } from "../routes/AuditLogsPage";
 import { BudgetAlertsPage } from "../routes/BudgetAlertsPage";
@@ -91,6 +92,7 @@ export default function HomePage() {
       {activePage === "providers" && <ProvidersPage client={client} />}
       {activePage === "models" && <ModelsPage client={client} />}
       {activePage === "route-policies" && <RoutePoliciesPage client={client} />}
+      {activePage === "anomaly-policies" && <AnomalyPoliciesPage client={client} />}
       {activePage === "policies" && <PoliciesPage client={client} />}
       {activePage === "budgets" && <BudgetsPage client={client} />}
       {activePage === "budget-alerts" && <BudgetAlertsPage client={client} />}

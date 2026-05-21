@@ -64,6 +64,49 @@ export type PasswordlessMockLoginResponse = {
   role: AdminRole;
 };
 
+export type AnomalyRuleType =
+  | "daily_cost"
+  | "api_key_cost_spike"
+  | "model_cost_spike"
+  | "error_rate_spike"
+  | string;
+
+export type AnomalyPolicy = {
+  id: ID;
+  name: string;
+  rule_type: AnomalyRuleType;
+  scope_type: "org" | "api_key" | "model" | string;
+  scope_id?: ID | null;
+  model_alias?: string | null;
+  threshold_micro_usd?: number | null;
+  threshold_bps?: number | null;
+  spike_multiplier_bps: number;
+  current_window_minutes: number;
+  baseline_window_minutes: number;
+  min_requests: number;
+  action: "notify" | "downgrade" | "block" | string;
+  fallback_model?: string | null;
+  status: "active" | "disabled" | string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateAnomalyPolicyRequest = {
+  name: string;
+  rule_type: "daily_cost" | "api_key_cost_spike" | "model_cost_spike" | "error_rate_spike";
+  scope_type: "org" | "api_key" | "model";
+  scope_id?: ID | null;
+  model_alias?: string;
+  threshold_micro_usd?: number | null;
+  threshold_bps?: number | null;
+  spike_multiplier_bps?: number;
+  current_window_minutes?: number;
+  baseline_window_minutes?: number;
+  min_requests?: number;
+  action: "notify" | "downgrade" | "block";
+  fallback_model?: string;
+};
+
 export type APIKey = {
   id: ID;
   name: string;

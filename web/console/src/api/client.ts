@@ -3,6 +3,7 @@ import type {
   APIKeyCreateResponse,
   AdminMe,
   AdminAuditLog,
+  AnomalyPolicy,
   AnalyticsDailyCostResponse,
   AnalyticsErrorRateResponse,
   AnalyticsModelCostResponse,
@@ -14,6 +15,7 @@ import type {
   CacheEvent,
   ContentPolicy,
   CreateAPIKeyRequest,
+  CreateAnomalyPolicyRequest,
   CreateBudgetAlertRequest,
   CreateBudgetRequest,
   CreateContentPolicyRequest,
@@ -88,6 +90,13 @@ export function createApiClient(options: ApiClientOptions) {
     listMembers: () => request<ListResponse<Member>>("/api/v1/admin/members"),
     createMember: (body: CreateMemberRequest) =>
       request<Member>("/api/v1/admin/members", {
+        method: "POST",
+        body: JSON.stringify(body)
+      }),
+    listAnomalyPolicies: () =>
+      request<ListResponse<AnomalyPolicy>>("/api/v1/admin/anomaly-policies"),
+    createAnomalyPolicy: (body: CreateAnomalyPolicyRequest) =>
+      request<AnomalyPolicy>("/api/v1/admin/anomaly-policies", {
         method: "POST",
         body: JSON.stringify(body)
       }),

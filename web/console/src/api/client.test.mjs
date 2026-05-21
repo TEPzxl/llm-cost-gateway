@@ -216,3 +216,45 @@ test("creates content policy", async () => {
   assert.equal(JSON.parse(calls[0].init.body).pii_action, "redact");
   assert.equal(created.pii_action, "redact");
 });
+
+test("creates anomaly policy", async () => {
+  const calls = [];
+  const client = createApiClient({
+    baseUrl: "http://gateway.test",
+    getToken: () => "llmgw_admin_test",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return new Response(
+        JSON.stringify({
+          id: "00000000-0000-0000-0000-000000000044",
+          name: "daily guard",
+          rule_type: "daily_cost",
+          scope_type: "org",
+          threshold_micro_usd: 1000000,
+          spike_multiplier_bps: 20000,
+          current_window_minutes: 60,
+          baseline_window_minutes: 1440,
+          min_requests: 1,
+          action: "block",
+          status: "active",
+          created_at: "2026-05-21T00:00:00Z",
+          updated_at: "2026-05-21T00:00:00Z"
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  });
+
+  const created = await client.createAnomalyPolicy({
+    name: "daily guard",
+    rule_type: "daily_cost",
+    scope_type: "org",
+    threshold_micro_usd: 1000000,
+    action: "block"
+  });
+
+  assert.equal(calls[0].url, "http://gateway.test/api/v1/admin/anomaly-policies");
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(JSON.parse(calls[0].init.body).threshold_micro_usd, 1000000);
+  assert.equal(created.rule_type, "daily_cost");
+});

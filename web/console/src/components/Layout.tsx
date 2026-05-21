@@ -8,6 +8,7 @@ export type ConsolePage =
   | "providers"
   | "models"
   | "route-policies"
+  | "anomaly-policies"
   | "policies"
   | "budgets"
   | "budget-alerts"
@@ -31,6 +32,7 @@ const navItems: Array<{ id: ConsolePage; label: string }> = [
   { id: "providers", label: "Providers" },
   { id: "models", label: "Models" },
   { id: "route-policies", label: "Route Policies" },
+  { id: "anomaly-policies", label: "Anomaly Policies" },
   { id: "policies", label: "Policies" },
   { id: "budgets", label: "Budgets" },
   { id: "budget-alerts", label: "Budget Alerts" },
