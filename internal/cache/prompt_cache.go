@@ -49,17 +49,23 @@ type CachedChatResponse struct {
 }
 
 type PromptCache struct {
-	client redis.Cmdable
-	ttl    time.Duration
-	now    func() time.Time
+	client    redis.Cmdable
+	ttl       time.Duration
+	now       func() time.Time
+	responses responseCodec
 }
 
-func NewPromptCache(client redis.Cmdable, ttl time.Duration) *PromptCache {
-	return &PromptCache{
-		client: client,
-		ttl:    ttl,
-		now:    func() time.Time { return time.Now().UTC() },
+func NewPromptCache(client redis.Cmdable, ttl time.Duration, secretEncryptionKey string) (*PromptCache, error) {
+	responses, err := newResponseCodec(secretEncryptionKey)
+	if err != nil {
+		return nil, err
 	}
+	return &PromptCache{
+		client:    client,
+		ttl:       ttl,
+		now:       func() time.Time { return time.Now().UTC() },
+		responses: responses,
+	}, nil
 }
 
 func BuildPromptKey(input PromptKeyInput) (PromptKey, error) {
@@ -108,9 +114,14 @@ func (c *PromptCache) Get(ctx context.Context, key PromptKey) (CachedChatRespons
 		}
 		return CachedChatResponse{}, err
 	}
-	var item CachedChatResponse
-	if err := json.Unmarshal(raw, &item); err != nil {
+	var sealed encryptedCachedChatResponse
+	if err := json.Unmarshal(raw, &sealed); err != nil {
 		return CachedChatResponse{}, err
+	}
+	item, err := c.responses.Open(sealed)
+	if err != nil {
+		_ = c.client.Del(ctx, key.RedisKey).Err()
+		return CachedChatResponse{}, ErrCacheMiss
 	}
 	return item, nil
 }
@@ -126,7 +137,11 @@ func (c *PromptCache) Set(ctx context.Context, key PromptKey, item CachedChatRes
 	if item.CachedAt.IsZero() {
 		item.CachedAt = c.now()
 	}
-	body, err := json.Marshal(item)
+	sealed, err := c.responses.Seal(item)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(sealed)
 	if err != nil {
 		return err
 	}

@@ -9,12 +9,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/tep/llm-cost-gateway/internal/netutil"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 )
@@ -27,10 +27,11 @@ const (
 var alertThresholds = []int32{80, 90, 100}
 
 type AlertService struct {
-	store  *store.Store
-	budget *Service
-	client *http.Client
-	clock  func() time.Time
+	store              *store.Store
+	budget             *Service
+	client             *http.Client
+	clock              func() time.Time
+	publicOutboundOnly bool
 }
 
 type AlertOption func(*AlertService)
@@ -39,6 +40,15 @@ func WithAlertHTTPClient(client *http.Client) AlertOption {
 	return func(s *AlertService) {
 		if client != nil {
 			s.client = client
+		}
+	}
+}
+
+func WithAlertPublicOutboundOnly(enabled bool) AlertOption {
+	return func(s *AlertService) {
+		s.publicOutboundOnly = enabled
+		if enabled {
+			s.client = netutil.PublicOnlyHTTPClient(5 * time.Second)
 		}
 	}
 }
@@ -78,7 +88,7 @@ func NewAlertService(st *store.Store, opts ...AlertOption) *AlertService {
 	service := &AlertService{
 		store:  st,
 		budget: NewService(st.Queries),
-		client: http.DefaultClient,
+		client: netutil.TimeoutHTTPClient(5 * time.Second),
 		clock:  func() time.Time { return time.Now().UTC() },
 	}
 	service.budget.clock = service.clock
@@ -96,7 +106,7 @@ func (s *AlertService) CreateAlert(ctx context.Context, params CreateAlertParams
 		return db.BudgetAlert{}, fmt.Errorf("budget_id is required")
 	}
 	webhookURL := strings.TrimSpace(params.WebhookURL)
-	if err := validateWebhookURL(webhookURL); err != nil {
+	if err := validateWebhookURL(webhookURL, s.publicOutboundOnly); err != nil {
 		return db.BudgetAlert{}, err
 	}
 	status := params.Status
@@ -201,8 +211,10 @@ func (s *AlertService) deliver(ctx context.Context, alert db.BudgetAlert, status
 	deliveryStatus := AlertDeliverySuccess
 	var httpStatus *int32
 	var errorMessage string
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, alert.WebhookUrl, bytes.NewReader(body))
-	if err != nil {
+	if err := validateWebhookURL(alert.WebhookUrl, s.publicOutboundOnly); err != nil {
+		deliveryStatus = AlertDeliveryFailed
+		errorMessage = "webhook URL is not allowed"
+	} else if req, err := http.NewRequestWithContext(ctx, http.MethodPost, alert.WebhookUrl, bytes.NewReader(body)); err != nil {
 		deliveryStatus = AlertDeliveryFailed
 		errorMessage = "build webhook request failed"
 	} else {
@@ -249,21 +261,11 @@ func thresholdReached(used int64, limit int64, threshold int32) bool {
 	return used*100 >= limit*int64(threshold)
 }
 
-func validateWebhookURL(value string) error {
-	if value == "" {
+func validateWebhookURL(value string, publicOutboundOnly bool) error {
+	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("webhook_url is required")
 	}
-	parsed, err := url.Parse(value)
-	if err != nil {
-		return fmt.Errorf("webhook_url must be a valid URL")
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("webhook_url must use http or https")
-	}
-	if parsed.Host == "" {
-		return fmt.Errorf("webhook_url must include host")
-	}
-	return nil
+	return netutil.ValidateOutboundHTTPURL(value, "webhook_url", publicOutboundOnly)
 }
 
 func signWebhook(secret string, body []byte) string {

@@ -121,6 +121,24 @@ func TestRevokedAdminTokenCannotAccessAdminAPI(t *testing.T) {
 	}
 }
 
+func TestPasswordlessMockLoginNotRegisteredInProduction(t *testing.T) {
+	router, _ := newTask5TestRouterWithEnv(t, "production")
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/admin/sessions/passwordless-mock",
+		strings.NewReader(`{"org_slug":"prod-org","email":"owner@example.com"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("POST /api/v1/admin/sessions/passwordless-mock status = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}
+
 type createAdminTokenResponse struct {
 	ID          uuid.UUID `json:"id"`
 	Name        string    `json:"name"`
@@ -145,6 +163,11 @@ type adminMeResponse struct {
 
 func newTask5TestRouter(t *testing.T) (*gin.Engine, *store.Store) {
 	t.Helper()
+	return newTask5TestRouterWithEnv(t, "test")
+}
+
+func newTask5TestRouterWithEnv(t *testing.T, appEnv string) (*gin.Engine, *store.Store) {
+	t.Helper()
 
 	ctx := context.Background()
 	pool := testutil.OpenPostgres(t, ctx)
@@ -152,7 +175,7 @@ func newTask5TestRouter(t *testing.T) (*gin.Engine, *store.Store) {
 	resetTask5TestDatabase(t, ctx, st)
 
 	router := NewRouter(RouterConfig{
-		AppEnv:                 "test",
+		AppEnv:                 appEnv,
 		PlatformBootstrapToken: "bootstrap-token",
 		TokenHashSecret:        "token-hash-secret",
 		SecretEncryptionKey:    "0123456789abcdef0123456789abcdef",

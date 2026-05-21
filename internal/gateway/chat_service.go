@@ -25,6 +25,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/embedding"
 	"github.com/tep/llm-cost-gateway/internal/events"
 	"github.com/tep/llm-cost-gateway/internal/metering"
+	"github.com/tep/llm-cost-gateway/internal/netutil"
 	"github.com/tep/llm-cost-gateway/internal/observability"
 	contentpolicy "github.com/tep/llm-cost-gateway/internal/policy"
 	"github.com/tep/llm-cost-gateway/internal/provider"
@@ -62,6 +63,7 @@ type ChatService struct {
 	semanticMaxTemp     float64
 	tracer              trace.Tracer
 	logger              *zap.Logger
+	publicOutboundOnly  bool
 }
 
 type ChatServiceOption func(*ChatService)
@@ -109,6 +111,16 @@ func WithTracer(tracer trace.Tracer) ChatServiceOption {
 	return func(s *ChatService) {
 		if tracer != nil {
 			s.tracer = tracer
+		}
+	}
+}
+
+func WithPublicOutboundOnly(enabled bool) ChatServiceOption {
+	return func(s *ChatService) {
+		s.publicOutboundOnly = enabled
+		if enabled {
+			s.registry = provider.NewRegistry(provider.WithRegistryPublicOutboundOnly(true))
+			s.alerts = budget.NewAlertService(s.store, budget.WithAlertPublicOutboundOnly(true))
 		}
 	}
 }
@@ -972,6 +984,9 @@ func (s *ChatService) providerConfig(ctx context.Context, item db.Provider) (con
 	}
 	if item.Type != provider.TypeOpenAICompatible {
 		return cfg, nil
+	}
+	if err := netutil.ValidateOutboundHTTPURL(cfg.BaseURL, "provider base_url", s.publicOutboundOnly); err != nil {
+		return contract.ProviderConfig{}, err
 	}
 
 	secret, err := s.store.Queries.GetProviderSecret(ctx, db.GetProviderSecretParams{

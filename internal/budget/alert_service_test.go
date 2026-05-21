@@ -14,6 +14,12 @@ import (
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 )
 
+func TestValidateWebhookURLRejectsUnsafePublicOutboundURL(t *testing.T) {
+	if err := validateWebhookURL("https://127.0.0.1/hook", true); err == nil {
+		t.Fatal("validateWebhookURL returned nil error, want unsafe URL rejection")
+	}
+}
+
 func TestAlertServiceDeliversThresholdOnceAndNextThresholdLater(t *testing.T) {
 	ctx := context.Background()
 	st := openBudgetTestStore(t, ctx)

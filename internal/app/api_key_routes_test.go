@@ -108,6 +108,27 @@ func TestAdminAPIKeyRoutesAreScopedByOrg(t *testing.T) {
 	revokeAPIKeyViaHTTP(t, router, adminB.Token, created.ID, http.StatusNotFound)
 }
 
+func TestAdminAPIKeyRoutesRequireManageTokenScope(t *testing.T) {
+	router, _ := newTask5TestRouter(t)
+	orgID := createOrgViaHTTP(t, router, "Limited Token Org", "limited-token-org")
+	limitedToken := createAdminTokenWithScopesViaHTTP(t, router, orgID, []string{auth.AdminScopeView})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/admin/api-keys",
+		strings.NewReader(`{"name":"blocked-key","scopes":["chat.completions"],"rpm_limit":60}`),
+	)
+	req.Header.Set("Authorization", "Bearer "+limitedToken.Token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST /api/v1/admin/api-keys status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+}
+
 func TestAdminAPIKeyRoutesRejectInvalidRPM(t *testing.T) {
 	router, _ := newTask5TestRouter(t)
 	orgID := createOrgViaHTTP(t, router, "Invalid RPM Org", "invalid-rpm-org")
@@ -199,6 +220,38 @@ type apiKeyResponse struct {
 	ExpiresAt                *time.Time `json:"expires_at"`
 	LastUsedAt               *time.Time `json:"last_used_at"`
 	CreatedAt                time.Time  `json:"created_at"`
+}
+
+func createAdminTokenWithScopesViaHTTP(t *testing.T, router http.Handler, orgID uuid.UUID, scopes []string) createAdminTokenResponse {
+	t.Helper()
+
+	payload, err := json.Marshal(map[string]any{
+		"name":   "scoped-admin-token",
+		"scopes": scopes,
+	})
+	if err != nil {
+		t.Fatalf("marshal create admin token request: %v", err)
+	}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/platform/orgs/"+orgID.String()+"/admin-tokens",
+		strings.NewReader(string(payload)),
+	)
+	req.Header.Set("Authorization", "Bearer bootstrap-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /api/v1/platform/orgs/%s/admin-tokens status = %d, want %d; body=%s", orgID, rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var response createAdminTokenResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode create admin token response: %v", err)
+	}
+	return response
 }
 
 func createAPIKeyViaHTTP(t *testing.T, router http.Handler, adminToken string, body createAPIKeyRequest) apiKeyCreateResponse {

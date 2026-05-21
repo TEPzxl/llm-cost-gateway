@@ -24,7 +24,7 @@
 
 ### GET `/metrics`
 
-无需鉴权，返回 Prometheus text format。本地地址为 `http://localhost:8080/metrics`。
+非生产环境无需鉴权，返回 Prometheus text format。本地地址为 `http://localhost:8080/metrics`。生产环境默认不注册该路由，应通过受保护的网络或反向代理策略暴露采集入口。
 
 ## Platform API
 

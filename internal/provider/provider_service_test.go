@@ -4,9 +4,25 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 )
+
+func TestServiceRejectsUnsafeProviderBaseURLWhenPublicOutboundOnly(t *testing.T) {
+	service := NewService(nil, "0123456789abcdef0123456789abcdef", WithPublicOutboundOnly(true))
+	_, err := service.CreateProvider(context.Background(), CreateProviderParams{
+		OrgID:     uuid.New(),
+		Name:      "unsafe-provider",
+		Type:      TypeOpenAICompatible,
+		BaseURL:   stringPtr("https://127.0.0.1/v1"),
+		APIKey:    stringPtr("provider-secret-key"),
+		TimeoutMS: 30000,
+	})
+	if err == nil {
+		t.Fatal("CreateProvider returned nil error, want unsafe base_url rejection")
+	}
+}
 
 func TestServiceCreateModelCreatesInitialPricingVersion(t *testing.T) {
 	ctx := context.Background()

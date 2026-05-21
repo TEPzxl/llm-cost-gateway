@@ -14,6 +14,10 @@ func Unauthorized(message string) *domain.Error {
 	return domain.NewError(http.StatusUnauthorized, domain.CodeUnauthorized, message)
 }
 
+func RequestTooLarge(message string) *domain.Error {
+	return domain.NewError(http.StatusRequestEntityTooLarge, domain.CodeInvalidRequest, message)
+}
+
 func NotFound(message string) *domain.Error {
 	return domain.NewError(http.StatusNotFound, domain.CodeNotFound, message)
 }

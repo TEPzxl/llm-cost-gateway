@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/tep/llm-cost-gateway/internal/costing"
 	secretcrypto "github.com/tep/llm-cost-gateway/internal/crypto"
+	"github.com/tep/llm-cost-gateway/internal/netutil"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 )
@@ -35,6 +36,15 @@ func (e *ValidationError) Error() string {
 type Service struct {
 	store               *store.Store
 	secretEncryptionKey string
+	publicOutboundOnly  bool
+}
+
+type ServiceOption func(*Service)
+
+func WithPublicOutboundOnly(enabled bool) ServiceOption {
+	return func(s *Service) {
+		s.publicOutboundOnly = enabled
+	}
 }
 
 type CreateProviderParams struct {
@@ -56,15 +66,19 @@ type CreateModelParams struct {
 	ContextWindow                  *int32
 }
 
-func NewService(st *store.Store, secretEncryptionKey string) *Service {
-	return &Service{
+func NewService(st *store.Store, secretEncryptionKey string, opts ...ServiceOption) *Service {
+	service := &Service{
 		store:               st,
 		secretEncryptionKey: secretEncryptionKey,
 	}
+	for _, opt := range opts {
+		opt(service)
+	}
+	return service
 }
 
 func (s *Service) CreateProvider(ctx context.Context, params CreateProviderParams) (db.Provider, error) {
-	if err := validateProviderParams(params); err != nil {
+	if err := validateProviderParams(params, s.publicOutboundOnly); err != nil {
 		return db.Provider{}, err
 	}
 
@@ -172,7 +186,7 @@ func (s *Service) ListModels(ctx context.Context, orgID uuid.UUID) ([]db.Model, 
 	return s.store.Queries.ListModels(ctx, orgID)
 }
 
-func validateProviderParams(params CreateProviderParams) error {
+func validateProviderParams(params CreateProviderParams, publicOutboundOnly bool) error {
 	if params.OrgID == uuid.Nil {
 		return validationError("org_id is required")
 	}
@@ -189,6 +203,9 @@ func validateProviderParams(params CreateProviderParams) error {
 	case TypeOpenAICompatible:
 		if params.BaseURL == nil || strings.TrimSpace(*params.BaseURL) == "" {
 			return validationError("base_url is required")
+		}
+		if err := netutil.ValidateOutboundHTTPURL(*params.BaseURL, "base_url", publicOutboundOnly); err != nil {
+			return validationError(err.Error())
 		}
 		if params.APIKey == nil || strings.TrimSpace(*params.APIKey) == "" {
 			return validationError("api_key is required")

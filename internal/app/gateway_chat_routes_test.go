@@ -1018,7 +1018,10 @@ func newGatewayChatTestRouterWithPromptCache(t *testing.T) (*gin.Engine, *store.
 
 	ctx := context.Background()
 	redisClient := testutil.OpenRedis(t, ctx)
-	promptCache := promptcache.NewPromptCache(redisClient, time.Minute)
+	promptCache, err := promptcache.NewPromptCache(redisClient, time.Minute, "0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("NewPromptCache returned error: %v", err)
+	}
 	return newGatewayChatTestRouterWithOptions(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}}, nil, promptCache)
 }
 
@@ -1027,7 +1030,10 @@ func newGatewayChatTestRouterWithSemanticCache(t *testing.T, threshold float64, 
 
 	ctx := context.Background()
 	redisClient := testutil.OpenRedis(t, ctx)
-	semanticCache := promptcache.NewSemanticCache(redisClient, time.Minute)
+	semanticCache, err := promptcache.NewSemanticCache(redisClient, time.Minute, "0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("NewSemanticCache returned error: %v", err)
+	}
 	return newGatewayChatTestRouterWithSemanticOptions(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}}, nil, semanticCache, threshold, maxTemp)
 }
 

@@ -249,6 +249,56 @@ func TestLoadRejectsInvalidEncryptionKeyLength(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsUnsafeProductionConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+	}{
+		{
+			name: "weak platform token",
+			env: map[string]string{
+				"PLATFORM_BOOTSTRAP_TOKEN": "dev-bootstrap-token",
+			},
+		},
+		{
+			name: "weak token hash secret",
+			env: map[string]string{
+				"TOKEN_HASH_SECRET": "dev-token-hash-secret",
+			},
+		},
+		{
+			name: "example encryption key",
+			env: map[string]string{
+				"SECRET_ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef",
+			},
+		},
+		{
+			name: "database ssl disabled",
+			env: map[string]string{
+				"DATABASE_URL": "postgres://llmgw:llmgw@example.com:5432/llmgw?sslmode=disable",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("APP_ENV", "production")
+			t.Setenv("DATABASE_URL", "postgres://llmgw:llmgw@example.com:5432/llmgw?sslmode=require")
+			t.Setenv("PLATFORM_BOOTSTRAP_TOKEN", "prod-bootstrap-token-012345678901")
+			t.Setenv("TOKEN_HASH_SECRET", "prod-token-hash-secret-0123456789")
+			t.Setenv("SECRET_ENCRYPTION_KEY", "fedcba98765432100123456789abcdef")
+
+			for key, value := range tt.env {
+				t.Setenv(key, value)
+			}
+
+			if _, err := Load(""); err == nil {
+				t.Fatal("Load returned nil error, want unsafe production config error")
+			}
+		})
+	}
+}
+
 func TestLoadRejectsInvalidBoundaryValues(t *testing.T) {
 	tests := []struct {
 		name string

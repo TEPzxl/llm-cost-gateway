@@ -8,14 +8,17 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	contract "github.com/tep/llm-cost-gateway/internal/provider/contract"
 	"github.com/tep/llm-cost-gateway/internal/testutil"
 )
 
+const testSecretEncryptionKey = "0123456789abcdef0123456789abcdef"
+
 func TestPromptCacheMissThenHit(t *testing.T) {
 	ctx := context.Background()
 	client := testutil.OpenRedis(t, ctx)
-	cache := NewPromptCache(client, time.Minute)
+	cache := newTestPromptCache(t, client, time.Minute)
 	key := mustPromptKey(t, nil, nil)
 	cached := CachedChatResponse{
 		ProviderID:    uuid.New(),
@@ -59,7 +62,7 @@ func TestPromptCacheKeyVariesByTemperature(t *testing.T) {
 func TestPromptCacheTTLExpiry(t *testing.T) {
 	ctx := context.Background()
 	client := testutil.OpenRedis(t, ctx)
-	cache := NewPromptCache(client, 50*time.Millisecond)
+	cache := newTestPromptCache(t, client, 50*time.Millisecond)
 	key := mustPromptKey(t, nil, nil)
 
 	if err := cache.Set(ctx, key, CachedChatResponse{ProviderID: uuid.New(), ModelID: uuid.New(), Content: "cached"}); err != nil {
@@ -74,7 +77,7 @@ func TestPromptCacheTTLExpiry(t *testing.T) {
 func TestPromptCacheDoesNotStorePromptText(t *testing.T) {
 	ctx := context.Background()
 	client := testutil.OpenRedis(t, ctx)
-	cache := NewPromptCache(client, time.Minute)
+	cache := newTestPromptCache(t, client, time.Minute)
 	prompt := "secret prompt text"
 	key, err := BuildPromptKey(PromptKeyInput{
 		OrgID:          uuid.New(),
@@ -97,6 +100,19 @@ func TestPromptCacheDoesNotStorePromptText(t *testing.T) {
 	if strings.Contains(raw, prompt) {
 		t.Fatalf("cache value leaked prompt text: %s", raw)
 	}
+	if strings.Contains(raw, "cached response") {
+		t.Fatalf("cache value leaked response content: %s", raw)
+	}
+}
+
+func newTestPromptCache(t *testing.T, client redis.Cmdable, ttl time.Duration) *PromptCache {
+	t.Helper()
+
+	cache, err := NewPromptCache(client, ttl, testSecretEncryptionKey)
+	if err != nil {
+		t.Fatalf("NewPromptCache returned error: %v", err)
+	}
+	return cache
 }
 
 func mustPromptKey(t *testing.T, temperature *float64, maxTokens *int) PromptKey {

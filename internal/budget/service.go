@@ -67,6 +67,12 @@ type Status struct {
 	WindowEnd         time.Time
 }
 
+type periodUsage struct {
+	UsedMicroUSD int64
+	WindowStart  time.Time
+	WindowEnd    time.Time
+}
+
 type CheckResult struct {
 	Allowed  bool
 	Exceeded bool
@@ -130,9 +136,10 @@ func (s *Service) GetStatus(ctx context.Context, orgID uuid.UUID) ([]Status, err
 		return nil, err
 	}
 
+	usageByPeriod := make(map[string]periodUsage, 2)
 	statuses := make([]Status, 0, len(budgets))
 	for _, item := range budgets {
-		status, err := s.statusForBudget(ctx, item)
+		status, err := s.statusForBudgetWithCache(ctx, item, usageByPeriod)
 		if err != nil {
 			return nil, err
 		}
@@ -175,31 +182,58 @@ func (s *Service) Check(ctx context.Context, orgID uuid.UUID) (CheckResult, erro
 }
 
 func (s *Service) statusForBudget(ctx context.Context, item db.Budget) (Status, error) {
-	start, end, err := s.periodWindow(item.Period)
-	if err != nil {
-		return Status{}, err
-	}
-	used, err := s.queries.GetBudgetUsedAmount(ctx, db.GetBudgetUsedAmountParams{
-		OrgID:       item.OrgID,
-		CreatedAt:   start,
-		CreatedAt_2: end,
-	})
+	return s.statusForBudgetWithCache(ctx, item, nil)
+}
+
+func (s *Service) statusForBudgetWithCache(ctx context.Context, item db.Budget, usageByPeriod map[string]periodUsage) (Status, error) {
+	usage, err := s.usageForPeriod(ctx, item.OrgID, item.Period, usageByPeriod)
 	if err != nil {
 		return Status{}, err
 	}
 
-	remaining := item.LimitMicroUsd - used
+	remaining := item.LimitMicroUsd - usage.UsedMicroUSD
 	if remaining < 0 {
 		remaining = 0
 	}
 	return Status{
 		Budget:            item,
-		UsedMicroUSD:      used,
+		UsedMicroUSD:      usage.UsedMicroUSD,
 		RemainingMicroUSD: remaining,
-		Exceeded:          used >= item.LimitMicroUsd,
-		WindowStart:       start,
-		WindowEnd:         end,
+		Exceeded:          usage.UsedMicroUSD >= item.LimitMicroUsd,
+		WindowStart:       usage.WindowStart,
+		WindowEnd:         usage.WindowEnd,
 	}, nil
+}
+
+func (s *Service) usageForPeriod(ctx context.Context, orgID uuid.UUID, period string, usageByPeriod map[string]periodUsage) (periodUsage, error) {
+	if usageByPeriod != nil {
+		if usage, ok := usageByPeriod[period]; ok {
+			return usage, nil
+		}
+	}
+
+	start, end, err := s.periodWindow(period)
+	if err != nil {
+		return periodUsage{}, err
+	}
+	used, err := s.queries.GetBudgetUsedAmount(ctx, db.GetBudgetUsedAmountParams{
+		OrgID:       orgID,
+		CreatedAt:   start,
+		CreatedAt_2: end,
+	})
+	if err != nil {
+		return periodUsage{}, err
+	}
+
+	usage := periodUsage{
+		UsedMicroUSD: used,
+		WindowStart:  start,
+		WindowEnd:    end,
+	}
+	if usageByPeriod != nil {
+		usageByPeriod[period] = usage
+	}
+	return usage, nil
 }
 
 func (s *Service) periodWindow(period string) (time.Time, time.Time, error) {

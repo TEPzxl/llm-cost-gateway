@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/tep/llm-cost-gateway/internal/embedding"
 	"github.com/tep/llm-cost-gateway/internal/testutil"
 )
@@ -15,7 +16,7 @@ import (
 func TestSemanticCacheSimilarRequestHit(t *testing.T) {
 	ctx := context.Background()
 	client := testutil.OpenRedis(t, ctx)
-	cache := NewSemanticCache(client, time.Minute)
+	cache := newTestSemanticCache(t, client, time.Minute)
 	adapter := embedding.NewMockAdapter()
 	orgID := uuid.New()
 	storedVector := mustEmbed(t, adapter, "hello world")
@@ -48,7 +49,7 @@ func TestSemanticCacheSimilarRequestHit(t *testing.T) {
 func TestSemanticCacheDissimilarRequestMiss(t *testing.T) {
 	ctx := context.Background()
 	client := testutil.OpenRedis(t, ctx)
-	cache := NewSemanticCache(client, time.Minute)
+	cache := newTestSemanticCache(t, client, time.Minute)
 	adapter := embedding.NewMockAdapter()
 	orgID := uuid.New()
 
@@ -75,7 +76,7 @@ func TestSemanticCacheDissimilarRequestMiss(t *testing.T) {
 func TestSemanticCacheThresholdApplies(t *testing.T) {
 	ctx := context.Background()
 	client := testutil.OpenRedis(t, ctx)
-	cache := NewSemanticCache(client, time.Minute)
+	cache := newTestSemanticCache(t, client, time.Minute)
 	adapter := embedding.NewMockAdapter()
 	orgID := uuid.New()
 
@@ -114,7 +115,7 @@ func TestSemanticCacheThresholdApplies(t *testing.T) {
 func TestSemanticCacheDoesNotStorePromptText(t *testing.T) {
 	ctx := context.Background()
 	client := testutil.OpenRedis(t, ctx)
-	cache := NewSemanticCache(client, time.Minute)
+	cache := newTestSemanticCache(t, client, time.Minute)
 	adapter := embedding.NewMockAdapter()
 	orgID := uuid.New()
 	prompt := "secret prompt text"
@@ -136,6 +137,19 @@ func TestSemanticCacheDoesNotStorePromptText(t *testing.T) {
 	if strings.Contains(raw, prompt) {
 		t.Fatalf("semantic cache value leaked prompt text: %s", raw)
 	}
+	if strings.Contains(raw, "cached response") {
+		t.Fatalf("semantic cache value leaked response content: %s", raw)
+	}
+}
+
+func newTestSemanticCache(t *testing.T, client redis.Cmdable, ttl time.Duration) *SemanticCache {
+	t.Helper()
+
+	cache, err := NewSemanticCache(client, ttl, testSecretEncryptionKey)
+	if err != nil {
+		t.Fatalf("NewSemanticCache returned error: %v", err)
+	}
+	return cache
 }
 
 func mustEmbed(t *testing.T, adapter *embedding.MockAdapter, text string) []float64 {

@@ -26,6 +26,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const defaultMaxRequestBodyBytes = 8 << 20
+
 type RouterConfig struct {
 	AppEnv                 string
 	PlatformBootstrapToken string
@@ -55,6 +57,7 @@ func NewRouter(cfg RouterConfig, logger *zap.Logger) *gin.Engine {
 
 	router := gin.New()
 	router.Use(middleware.RequestID())
+	router.Use(middleware.RequestBodyLimit(defaultMaxRequestBodyBytes))
 	router.Use(middleware.SecurityHeaders())
 	router.Use(middleware.Logging(logger))
 	router.Use(gin.Recovery())
@@ -67,7 +70,9 @@ func NewRouter(cfg RouterConfig, logger *zap.Logger) *gin.Engine {
 	if cfg.Store != nil && cfg.UsageAnalytics == nil {
 		cfg.UsageAnalytics = analytics.NewUsageAnalyticsService(cfg.Store, nil, false)
 	}
-	router.GET("/metrics", gin.WrapH(metrics.Handler()))
+	if cfg.AppEnv != "production" {
+		router.GET("/metrics", gin.WrapH(metrics.Handler()))
+	}
 
 	if cfg.Store != nil {
 		registerPlatformRoutes(router, cfg)
@@ -98,12 +103,14 @@ func registerGatewayRoutes(router *gin.Engine, cfg RouterConfig) {
 		gatewayservice.WithUsageAnalyticsSink(cfg.UsageAnalytics),
 		gatewayservice.WithPromptCache(cfg.PromptCache),
 		gatewayservice.WithSemanticCache(cfg.SemanticCache, cfg.EmbeddingAdapter, cfg.SemanticCacheThreshold, cfg.SemanticCacheMaxTemp),
+		gatewayservice.WithPublicOutboundOnly(cfg.AppEnv == "production"),
 		gatewayservice.WithLogger(cfg.Logger),
 	)
 	chatHandler := gatewayhandler.NewChatCompletionsHandler(chatService)
 
 	group := router.Group("/v1")
 	group.Use(middleware.GatewayAPIKeyAuth(apiKeyService))
+	group.Use(middleware.RequireAPIKeyScope(auth.APIKeyScopeChatCompletions))
 	group.Use(middleware.RateLimit(cfg.RateLimiter, middleware.WithRateLimitRecorder(meteringService), middleware.WithRateLimitMetrics(cfg.Metrics)))
 	group.POST("/chat/completions", chatHandler.Create)
 }
@@ -123,12 +130,13 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	adminTokenService := auth.NewAdminTokenService(cfg.Store.Queries, cfg.TokenHashSecret)
 	sessionService := auth.NewSessionService(cfg.Store.Queries, cfg.TokenHashSecret)
 	apiKeyService := auth.NewAPIKeyService(cfg.Store.Queries, cfg.TokenHashSecret)
-	providerService := provider.NewService(cfg.Store, cfg.SecretEncryptionKey)
-	providerHealthService := provider.NewHealthService(cfg.Store, cfg.SecretEncryptionKey)
+	publicOutboundOnly := cfg.AppEnv == "production"
+	providerService := provider.NewService(cfg.Store, cfg.SecretEncryptionKey, provider.WithPublicOutboundOnly(publicOutboundOnly))
+	providerHealthService := provider.NewHealthService(cfg.Store, cfg.SecretEncryptionKey, provider.WithHealthPublicOutboundOnly(publicOutboundOnly))
 	pricingService := costing.NewPricingService(cfg.Store)
 	routePolicyService := routing.NewService(cfg.Store)
 	budgetService := budget.NewService(cfg.Store.Queries)
-	budgetAlertService := budget.NewAlertService(cfg.Store)
+	budgetAlertService := budget.NewAlertService(cfg.Store, budget.WithAlertPublicOutboundOnly(publicOutboundOnly))
 	anomalyService := anomaly.NewService(cfg.Store)
 	auditService := audit.NewAdminAuditService(cfg.Store.Queries)
 	contentPolicyService := policy.NewService(cfg.Store)
@@ -150,8 +158,10 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	usageHandler := admin.NewUsageHandler(cfg.Store.Queries)
 	analyticsHandler := admin.NewAnalyticsHandler(cfg.UsageAnalytics, cfg.Store.Queries)
 
-	publicGroup := router.Group("/api/v1/admin")
-	publicGroup.POST("/sessions/passwordless-mock", sessionHandler.PasswordlessMockLogin)
+	if cfg.AppEnv != "production" {
+		publicGroup := router.Group("/api/v1/admin")
+		publicGroup.POST("/sessions/passwordless-mock", sessionHandler.PasswordlessMockLogin)
+	}
 
 	group := router.Group("/api/v1/admin")
 	group.Use(middleware.AdminAuth(adminTokenService, sessionService))

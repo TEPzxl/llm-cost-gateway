@@ -77,14 +77,42 @@ func New(ctx context.Context, cfg Config, logger *zap.Logger) (*App, error) {
 		return nil, fmt.Errorf("init usage analytics: %w", err)
 	}
 
-	return newWithDependencies(cfg, logger, st, redisClient, ratelimit.NewRedisLimiter(redisClient), publisher, publisherCloser, usageAnalytics, analyticsCloser, tracerProvider), nil
+	app, err := newWithDependencies(cfg, logger, st, redisClient, ratelimit.NewRedisLimiter(redisClient), publisher, publisherCloser, usageAnalytics, analyticsCloser, tracerProvider)
+	if err != nil {
+		if tracerProvider != nil {
+			_ = tracerProvider.Shutdown(ctx)
+		}
+		if publisherCloser != nil {
+			_ = publisherCloser.Close()
+		}
+		if analyticsCloser != nil {
+			_ = analyticsCloser.Close()
+		}
+		_ = redisClient.Close()
+		st.Close()
+		return nil, err
+	}
+	return app, nil
 }
 
 func NewWithStore(cfg Config, logger *zap.Logger, st *store.Store) *App {
-	return newWithDependencies(cfg, logger, st, nil, nil, events.DisabledPublisher{}, nil, analytics.NewUsageAnalyticsService(st, nil, false), nil, nil)
+	app, err := newWithDependencies(cfg, logger, st, nil, nil, events.DisabledPublisher{}, nil, analytics.NewUsageAnalyticsService(st, nil, false), nil, nil)
+	if err != nil {
+		panic(err)
+	}
+	return app
 }
 
-func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisClient *redis.Client, limiter middleware.RateLimiter, usageEventPublisher events.Publisher, usageEventCloser io.Closer, usageAnalytics *analytics.UsageAnalyticsService, analyticsCloser io.Closer, tracerProvider *sdktrace.TracerProvider) *App {
+func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisClient *redis.Client, limiter middleware.RateLimiter, usageEventPublisher events.Publisher, usageEventCloser io.Closer, usageAnalytics *analytics.UsageAnalyticsService, analyticsCloser io.Closer, tracerProvider *sdktrace.TracerProvider) (*App, error) {
+	promptCache, err := newPromptCache(cfg, redisClient)
+	if err != nil {
+		return nil, fmt.Errorf("init prompt cache: %w", err)
+	}
+	semanticCache, err := newSemanticCache(cfg, redisClient)
+	if err != nil {
+		return nil, fmt.Errorf("init semantic cache: %w", err)
+	}
+
 	router := NewRouter(RouterConfig{
 		AppEnv:                 cfg.AppEnv,
 		PlatformBootstrapToken: cfg.PlatformBootstrapToken,
@@ -97,8 +125,8 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 		Metrics:                observability.NewMetrics(),
 		UsageEventPublisher:    usageEventPublisher,
 		UsageAnalytics:         usageAnalytics,
-		PromptCache:            newPromptCache(cfg, redisClient),
-		SemanticCache:          newSemanticCache(cfg, redisClient),
+		PromptCache:            promptCache,
+		SemanticCache:          semanticCache,
 		EmbeddingAdapter:       embedding.NewMockAdapter(),
 		SemanticCacheThreshold: cfg.SemanticCacheThreshold,
 		SemanticCacheMaxTemp:   cfg.SemanticCacheMaxTemp,
@@ -107,6 +135,8 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 		Addr:              fmt.Sprintf(":%d", cfg.ServerPort),
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	return &App{
@@ -117,21 +147,21 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 		redis:  redisClient,
 		events: multiCloser(usageEventCloser, analyticsCloser),
 		traces: tracerProvider,
-	}
+	}, nil
 }
 
-func newPromptCache(cfg Config, redisClient redis.Cmdable) *promptcache.PromptCache {
+func newPromptCache(cfg Config, redisClient redis.Cmdable) (*promptcache.PromptCache, error) {
 	if !cfg.PromptCacheEnabled || redisClient == nil {
-		return nil
+		return nil, nil
 	}
-	return promptcache.NewPromptCache(redisClient, time.Duration(cfg.PromptCacheTTLSeconds)*time.Second)
+	return promptcache.NewPromptCache(redisClient, time.Duration(cfg.PromptCacheTTLSeconds)*time.Second, cfg.SecretEncryptionKey)
 }
 
-func newSemanticCache(cfg Config, redisClient redis.Cmdable) *promptcache.SemanticCache {
+func newSemanticCache(cfg Config, redisClient redis.Cmdable) (*promptcache.SemanticCache, error) {
 	if !cfg.SemanticCacheEnabled || redisClient == nil {
-		return nil
+		return nil, nil
 	}
-	return promptcache.NewSemanticCache(redisClient, time.Duration(cfg.PromptCacheTTLSeconds)*time.Second)
+	return promptcache.NewSemanticCache(redisClient, time.Duration(cfg.PromptCacheTTLSeconds)*time.Second, cfg.SecretEncryptionKey)
 }
 
 func newUsageEventPublisher(cfg Config) (events.Publisher, io.Closer, error) {

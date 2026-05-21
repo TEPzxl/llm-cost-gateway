@@ -1,11 +1,35 @@
 package app
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
+
+func TestNewRouterHidesMetricsInProduction(t *testing.T) {
+	router := NewRouter(RouterConfig{AppEnv: "production"}, zap.NewNop())
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GET /metrics status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestNewRouterExposesMetricsOutsideProduction(t *testing.T) {
+	router := NewRouter(RouterConfig{AppEnv: "test"}, zap.NewNop())
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /metrics status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
 
 func TestNewSetsGinModeFromEnvironment(t *testing.T) {
 	t.Cleanup(func() {

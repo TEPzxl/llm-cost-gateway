@@ -20,9 +20,10 @@ const semanticRedisKeyPrefix = "semantic_cache"
 var ErrSemanticCacheMiss = errors.New("semantic cache miss")
 
 type SemanticCache struct {
-	client redis.Cmdable
-	ttl    time.Duration
-	now    func() time.Time
+	client    redis.Cmdable
+	ttl       time.Duration
+	now       func() time.Time
+	responses responseCodec
 }
 
 type SemanticStoreInput struct {
@@ -48,20 +49,25 @@ type SemanticMatch struct {
 }
 
 type semanticItem struct {
-	CacheKeyHash   string             `json:"cache_key_hash"`
-	MessagesHash   string             `json:"messages_hash"`
-	RequestedModel string             `json:"requested_model"`
-	Embedding      []float64          `json:"embedding"`
-	Response       CachedChatResponse `json:"response"`
-	CreatedAt      time.Time          `json:"created_at"`
+	CacheKeyHash   string                      `json:"cache_key_hash"`
+	MessagesHash   string                      `json:"messages_hash"`
+	RequestedModel string                      `json:"requested_model"`
+	Embedding      []float64                   `json:"embedding"`
+	Response       encryptedCachedChatResponse `json:"response"`
+	CreatedAt      time.Time                   `json:"created_at"`
 }
 
-func NewSemanticCache(client redis.Cmdable, ttl time.Duration) *SemanticCache {
-	return &SemanticCache{
-		client: client,
-		ttl:    ttl,
-		now:    func() time.Time { return time.Now().UTC() },
+func NewSemanticCache(client redis.Cmdable, ttl time.Duration, secretEncryptionKey string) (*SemanticCache, error) {
+	responses, err := newResponseCodec(secretEncryptionKey)
+	if err != nil {
+		return nil, err
 	}
+	return &SemanticCache{
+		client:    client,
+		ttl:       ttl,
+		now:       func() time.Time { return time.Now().UTC() },
+		responses: responses,
+	}, nil
 }
 
 func (c *SemanticCache) Store(ctx context.Context, input SemanticStoreInput) (SemanticMatch, error) {
@@ -75,16 +81,22 @@ func (c *SemanticCache) Store(ctx context.Context, input SemanticStoreInput) (Se
 		return SemanticMatch{}, fmt.Errorf("semantic cache ttl must be greater than zero")
 	}
 	cacheKeyHash := semanticCacheKeyHash(input.OrgID, input.RequestedModel, input.MessagesHash)
+	response := input.Response
+	createdAt := c.now()
+	if response.CachedAt.IsZero() {
+		response.CachedAt = createdAt
+	}
+	sealedResponse, err := c.responses.Seal(response)
+	if err != nil {
+		return SemanticMatch{}, err
+	}
 	item := semanticItem{
 		CacheKeyHash:   cacheKeyHash,
 		MessagesHash:   input.MessagesHash,
 		RequestedModel: strings.TrimSpace(input.RequestedModel),
 		Embedding:      append([]float64(nil), input.Embedding...),
-		Response:       input.Response,
-		CreatedAt:      c.now(),
-	}
-	if item.Response.CachedAt.IsZero() {
-		item.Response.CachedAt = item.CreatedAt
+		Response:       sealedResponse,
+		CreatedAt:      createdAt,
 	}
 	body, err := json.Marshal(item)
 	if err != nil {
@@ -101,7 +113,7 @@ func (c *SemanticCache) Store(ctx context.Context, input SemanticStoreInput) (Se
 		CacheKeyHash: cacheKeyHash,
 		MessagesHash: input.MessagesHash,
 		Similarity:   1,
-		Response:     item.Response,
+		Response:     response,
 	}, nil
 }
 
@@ -132,11 +144,17 @@ func (c *SemanticCache) Lookup(ctx context.Context, input SemanticLookupInput) (
 		}
 		score := CosineSimilarity(input.Embedding, item.Embedding)
 		if score > best.Similarity {
+			response, err := c.responses.Open(item.Response)
+			if err != nil {
+				_ = c.client.Del(ctx, key).Err()
+				_ = c.client.SRem(ctx, semanticIndexKey(input.OrgID, input.RequestedModel), key).Err()
+				continue
+			}
 			best = SemanticMatch{
 				CacheKeyHash: item.CacheKeyHash,
 				MessagesHash: item.MessagesHash,
 				Similarity:   score,
-				Response:     item.Response,
+				Response:     response,
 			}
 		}
 	}

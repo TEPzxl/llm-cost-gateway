@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	secretcrypto "github.com/tep/llm-cost-gateway/internal/crypto"
 	"github.com/tep/llm-cost-gateway/internal/domain"
+	"github.com/tep/llm-cost-gateway/internal/netutil"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 )
@@ -28,15 +29,31 @@ type HealthService struct {
 	secretEncryptionKey string
 	client              *http.Client
 	clock               func() time.Time
+	publicOutboundOnly  bool
 }
 
-func NewHealthService(st *store.Store, secretEncryptionKey string) *HealthService {
-	return &HealthService{
+type HealthServiceOption func(*HealthService)
+
+func WithHealthPublicOutboundOnly(enabled bool) HealthServiceOption {
+	return func(s *HealthService) {
+		s.publicOutboundOnly = enabled
+		if enabled {
+			s.client = netutil.PublicOnlyHTTPClient(5 * time.Second)
+		}
+	}
+}
+
+func NewHealthService(st *store.Store, secretEncryptionKey string, opts ...HealthServiceOption) *HealthService {
+	service := &HealthService{
 		store:               st,
 		secretEncryptionKey: secretEncryptionKey,
-		client:              http.DefaultClient,
+		client:              netutil.TimeoutHTTPClient(5 * time.Second),
 		clock:               func() time.Time { return time.Now().UTC() },
 	}
+	for _, opt := range opts {
+		opt(service)
+	}
+	return service
 }
 
 func (s *HealthService) List(ctx context.Context, orgID uuid.UUID) ([]db.Provider, error) {
@@ -80,6 +97,9 @@ func (s *HealthService) Check(ctx context.Context, orgID uuid.UUID, providerID u
 func (s *HealthService) checkOpenAICompatible(ctx context.Context, item db.Provider) (string, string) {
 	if !item.BaseUrl.Valid || strings.TrimSpace(item.BaseUrl.String) == "" {
 		return domain.CodeProviderError, "provider base_url is required"
+	}
+	if err := netutil.ValidateOutboundHTTPURL(item.BaseUrl.String, "provider base_url", s.publicOutboundOnly); err != nil {
+		return domain.CodeProviderError, err.Error()
 	}
 	secret, err := s.store.Queries.GetProviderSecret(ctx, db.GetProviderSecretParams{
 		OrgID:      item.OrgID,

@@ -133,6 +133,11 @@ func (c Config) Validate() error {
 			return fmt.Errorf("TRACING_SERVICE_NAME is required when tracing is enabled")
 		}
 	}
+	if c.AppEnv == "production" {
+		if err := validateProductionConfig(c); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -329,6 +334,39 @@ func validatePostgresURL(value string) error {
 		return fmt.Errorf("DATABASE_URL must include host")
 	}
 	return nil
+}
+
+func validateProductionConfig(c Config) error {
+	if weakProductionSecret(c.PlatformBootstrapToken, "change-me-bootstrap-token", "dev-bootstrap-token") {
+		return fmt.Errorf("PLATFORM_BOOTSTRAP_TOKEN must be a strong production secret")
+	}
+	if weakProductionSecret(c.TokenHashSecret, "change-me-token-hash-secret", "dev-token-hash-secret") {
+		return fmt.Errorf("TOKEN_HASH_SECRET must be a strong production secret")
+	}
+	if c.SecretEncryptionKey == "0123456789abcdef0123456789abcdef" {
+		return fmt.Errorf("SECRET_ENCRYPTION_KEY must not use the example key in production")
+	}
+	parsed, err := url.Parse(c.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("DATABASE_URL must be a valid URL: %w", err)
+	}
+	if strings.EqualFold(parsed.Query().Get("sslmode"), "disable") {
+		return fmt.Errorf("DATABASE_URL must not use sslmode=disable in production")
+	}
+	return nil
+}
+
+func weakProductionSecret(value string, forbidden ...string) bool {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) < 32 {
+		return true
+	}
+	for _, item := range forbidden {
+		if trimmed == item {
+			return true
+		}
+	}
+	return false
 }
 
 func validateRedisURL(value string) error {

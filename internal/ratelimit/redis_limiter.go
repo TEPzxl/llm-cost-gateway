@@ -12,6 +12,14 @@ import (
 
 const defaultWindowTTL = 2 * time.Minute
 
+const incrementWithTTLScript = `
+local count = redis.call("INCR", KEYS[1])
+if count == 1 then
+  redis.call("EXPIRE", KEYS[1], ARGV[1])
+end
+return count
+`
+
 type Decision struct {
 	Allowed   bool
 	Limit     int32
@@ -68,14 +76,13 @@ func (l *RedisLimiter) Allow(ctx context.Context, principal auth.APIKeyPrincipal
 		return decision, fmt.Errorf("redis limiter client is nil")
 	}
 
-	count, err := l.client.Incr(ctx, key).Result()
+	ttlSeconds := int64(math.Ceil(l.windowTTL.Seconds()))
+	if ttlSeconds <= 0 {
+		ttlSeconds = int64(defaultWindowTTL / time.Second)
+	}
+	count, err := l.client.Eval(ctx, incrementWithTTLScript, []string{key}, ttlSeconds).Int64()
 	if err != nil {
 		return decision, err
-	}
-	if count == 1 {
-		if err := l.client.Expire(ctx, key, l.windowTTL).Err(); err != nil {
-			return decision, err
-		}
 	}
 
 	remaining := int64(principal.RPMLimit) - count

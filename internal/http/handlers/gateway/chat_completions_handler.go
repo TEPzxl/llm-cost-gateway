@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,6 +34,11 @@ func (h *ChatCompletionsHandler) Create(c *gin.Context) {
 
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			httpapi.RespondError(c, httpapi.RequestTooLarge("request body too large"))
+			return
+		}
 		httpapi.RespondError(c, httpapi.InvalidRequest("invalid request body"))
 		return
 	}

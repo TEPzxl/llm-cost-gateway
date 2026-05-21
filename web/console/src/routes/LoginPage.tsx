@@ -7,6 +7,10 @@ type LoginPageProps = {
   onLogin: (token: string) => void;
 };
 
+const passwordlessMockEnabled =
+  process.env.NEXT_PUBLIC_ENABLE_PASSWORDLESS_MOCK === "true" ||
+  process.env.NODE_ENV !== "production";
+
 export function LoginPage({ onLogin }: LoginPageProps) {
   const client = useMemo(() => createApiClient({ getToken: () => null }), []);
   const [mode, setMode] = useState<"admin-token" | "passwordless">("admin-token");
@@ -29,7 +33,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (mode === "passwordless") {
+    if (mode === "passwordless" && passwordlessMockEnabled) {
       const slug = orgSlug.trim();
       const userEmail = email.trim();
       if (!slug || !userEmail) {
@@ -74,13 +78,15 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           >
             管理员令牌登录
           </button>
-          <button
-            className={mode === "passwordless" ? "button-secondary active" : "button-secondary"}
-            type="button"
-            onClick={() => selectMode("passwordless")}
-          >
-            免密登录（演示）
-          </button>
+          {passwordlessMockEnabled && (
+            <button
+              className={mode === "passwordless" ? "button-secondary active" : "button-secondary"}
+              type="button"
+              onClick={() => selectMode("passwordless")}
+            >
+              免密登录（演示）
+            </button>
+          )}
         </div>
         {mode === "admin-token" ? (
           <label className="field">

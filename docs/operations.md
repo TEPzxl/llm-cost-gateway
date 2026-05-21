@@ -141,4 +141,6 @@ Gateway metrics endpoint：
 curl http://localhost:8080/metrics
 ```
 
+生产环境默认不注册 `/metrics` 路由；如需生产采集，应通过受保护网络或反向代理策略显式暴露。
+
 Metrics label 不包含 request_id，也不包含 Prompt 或 Response 原文。

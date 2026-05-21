@@ -6,7 +6,7 @@ SaaS 多租户 LLM 网关与 CostOps 平台。
 
 ## 环境要求
 
-- Go 1.22+
+- Go 1.25+（生产镜像使用 Go 1.26.3 或更新补丁版本）
 - Node.js 22+
 - npm
 - Docker 与 Docker Compose
@@ -193,6 +193,8 @@ Gateway metrics endpoint：
 ```bash
 curl http://localhost:8080/metrics
 ```
+
+生产环境默认不注册 `/metrics` 路由；如需生产采集，应在受保护网络或反向代理策略下显式暴露。
 
 ## 文档
 

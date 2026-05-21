@@ -8,4 +8,5 @@ web/console/dist
 web/console/node_modules
 coverage
 .env
+.demo.env
 *.tsbuildinfo
