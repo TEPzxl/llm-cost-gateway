@@ -68,10 +68,17 @@ export function createApiClient(options: ApiClientOptions) {
 
     const response = await fetchImpl(`${baseUrl}${path}`, { ...init, headers });
     const text = await response.text();
-    const data = text ? JSON.parse(text) : null;
+    let data: unknown = null;
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(`API returned non-JSON response with status ${response.status}`);
+      }
+    }
     if (!response.ok) {
       const message =
-        data?.error?.message ?? `request failed with status ${response.status}`;
+        apiErrorMessage(data) ?? `request failed with status ${response.status}`;
       throw new Error(message);
     }
     return data as T;
@@ -187,4 +194,16 @@ export function createApiClient(options: ApiClientOptions) {
         `/api/v1/admin/analytics/error-rate${query}`
       )
   };
+}
+
+function apiErrorMessage(data: unknown): string | null {
+  if (!data || typeof data !== "object" || !("error" in data)) {
+    return null;
+  }
+  const error = (data as { error?: unknown }).error;
+  if (!error || typeof error !== "object" || !("message" in error)) {
+    return null;
+  }
+  const message = (error as { message?: unknown }).message;
+  return typeof message === "string" ? message : null;
 }

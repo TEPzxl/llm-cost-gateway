@@ -60,6 +60,27 @@ test("posts passwordless mock login without bearer token", async () => {
   assert.equal(result.token, "llmgw_session_plain");
 });
 
+test("reports non-json api responses clearly", async () => {
+  const client = createApiClient({
+    baseUrl: "http://gateway.test",
+    getToken: () => null,
+    fetchImpl: async () =>
+      new Response("<!DOCTYPE html><html></html>", {
+        status: 404,
+        headers: { "Content-Type": "text/html" }
+      })
+  });
+
+  await assert.rejects(
+    () =>
+      client.passwordlessMockLogin({
+        org_slug: "demo-org",
+        email: "owner@example.com"
+      }),
+    /API returned non-JSON response with status 404/
+  );
+});
+
 test("creates member through admin API", async () => {
   const calls = [];
   const client = createApiClient({

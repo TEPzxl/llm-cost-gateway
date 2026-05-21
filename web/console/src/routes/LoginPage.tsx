@@ -16,6 +16,11 @@ export function LoginPage({ onLogin }: LoginPageProps) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  function selectMode(nextMode: "admin-token" | "passwordless") {
+    setMode(nextMode);
+    setError("");
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (mode === "passwordless") {
@@ -59,14 +64,14 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           <button
             className={mode === "admin-token" ? "button-secondary active" : "button-secondary"}
             type="button"
-            onClick={() => setMode("admin-token")}
+            onClick={() => selectMode("admin-token")}
           >
             Admin Token
           </button>
           <button
             className={mode === "passwordless" ? "button-secondary active" : "button-secondary"}
             type="button"
-            onClick={() => setMode("passwordless")}
+            onClick={() => selectMode("passwordless")}
           >
             Passwordless Mock
           </button>

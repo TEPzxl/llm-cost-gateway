@@ -9,6 +9,9 @@ FROM node:22-alpine AS build
 
 WORKDIR /app
 
+ARG API_PROXY_TARGET=http://gateway:8080
+ENV API_PROXY_TARGET=$API_PROXY_TARGET
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY web/console ./
 RUN npm run build
