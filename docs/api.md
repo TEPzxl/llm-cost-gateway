@@ -1,6 +1,6 @@
-# API Reference
+# API 参考
 
-本文档记录当前 v0.1 MVP 已实现的 HTTP API。所有业务接口都返回 JSON，错误格式统一为：
+本文档记录当前已实现的 HTTP API。所有业务接口都返回 JSON，错误格式统一为：
 
 ```json
 {
@@ -69,11 +69,31 @@ Authorization: Bearer <PLATFORM_BOOTSTRAP_TOKEN>
 Authorization: Bearer <DEMO_ADMIN_TOKEN>
 ```
 
-`org_id` 从 Admin Token 解析，调用方不能通过请求参数指定租户。
+也支持 passwordless mock session 返回的 session token。`org_id` 从 token/session 解析，调用方不能通过请求参数指定租户。
+
+### POST `/api/v1/admin/sessions/passwordless-mock`
+
+开发和演示用免密登录接口，不需要 Bearer Token。
+
+```json
+{
+  "org_slug": "demo",
+  "email": "owner@example.com"
+}
+```
+
+响应包含短期 session token、用户、组织和角色信息。
 
 ### GET `/api/v1/admin/me`
 
-返回当前组织和 Admin Token 元信息。
+返回当前组织、当前 actor 和角色信息。
+
+### Members
+
+- `GET /api/v1/admin/members`
+- `POST /api/v1/admin/members`
+
+角色支持 `owner`、`admin`、`viewer`。Admin Token 作为 service token 兼容旧接口。
 
 ### API Key
 
@@ -84,11 +104,14 @@ Authorization: Bearer <DEMO_ADMIN_TOKEN>
   "name": "docs-assistant-prod",
   "scopes": ["chat.completions"],
   "rpm_limit": 60,
+  "daily_cost_limit_micro_usd": null,
+  "monthly_cost_limit_micro_usd": null,
+  "quota_action": "block",
   "expires_at": null
 }
 ```
 
-响应中的 `key` 明文只返回一次。列表接口 `GET /api/v1/admin/api-keys` 不返回明文 key。
+响应中的 `key` 明文只返回一次。列表接口 `GET /api/v1/admin/api-keys` 不返回明文 key。Daily/monthly cost quota 在 Gateway 请求前检查，`quota_action=block` 会返回 `api_key_quota_exceeded`。
 
 `POST /api/v1/admin/api-keys/{api_key_id}/revoke` 撤销 key。
 
@@ -120,7 +143,13 @@ OpenAI-compatible Provider：
 }
 ```
 
-响应不会返回 `api_key`。列表接口为 `GET /api/v1/admin/providers`。
+响应不会返回 `api_key`。Provider API Key 加密存储。
+
+相关接口：
+
+- `GET /api/v1/admin/providers`
+- `GET /api/v1/admin/providers/health`
+- `POST /api/v1/admin/providers/{provider_id}/health-check`
 
 ### Models
 
@@ -138,6 +167,11 @@ OpenAI-compatible Provider：
 ```
 
 金额字段使用 micro USD 整数，不使用浮点金额。列表接口为 `GET /api/v1/admin/models`。
+
+价格版本接口：
+
+- `PATCH /api/v1/admin/models/{model_id}/pricing`
+- `GET /api/v1/admin/models/{model_id}/pricing-versions`
 
 ### Route Policies
 
@@ -159,7 +193,9 @@ OpenAI-compatible Provider：
 }
 ```
 
-v0.1 仅支持 `single` strategy。列表接口为 `GET /api/v1/admin/route-policies`。
+支持 `single`、`fallback`、`lowest_cost`、`lowest_latency` strategy。列表接口为 `GET /api/v1/admin/route-policies`。
+
+`lowest_cost` 可使用 `config.max_estimated_cost_micro_usd` 和 `config.fallback_to_priority`。`lowest_latency` 可使用 `config.latency_window_minutes`。
 
 ### Budgets
 
@@ -178,11 +214,45 @@ v0.1 仅支持 `single` strategy。列表接口为 `GET /api/v1/admin/route-poli
 
 列表接口为 `GET /api/v1/admin/budgets`。预算状态接口为 `GET /api/v1/admin/budgets/status`。
 
+### Budget Alerts
+
+- `POST /api/v1/admin/budget-alerts`
+- `GET /api/v1/admin/budget-alerts`
+- `GET /api/v1/admin/budget-alert-deliveries`
+
+预算告警支持 webhook delivery。Webhook secret 不会在响应中返回。
+
+### Content Policies
+
+- `POST /api/v1/admin/content-policies`
+- `GET /api/v1/admin/content-policies`
+
+PII 策略支持 `allow`、`redact`、`block`。
+
+### Anomaly Policies
+
+- `POST /api/v1/admin/anomaly-policies`
+- `GET /api/v1/admin/anomaly-policies`
+
+规则支持每日成本阈值、API Key 成本突增、模型成本突增和错误率突增。动作支持 `notify`、`downgrade`、`block`。
+
+### Audit Logs
+
+`GET /api/v1/admin/audit-logs`
+
+返回 Admin API 变更操作审计。
+
+### Cache Events
+
+`GET /api/v1/admin/cache-events`
+
+支持 exact cache 与 semantic cache 相关事件查询。
+
 ### Request Logs
 
 `GET /api/v1/admin/request-logs`
 
-支持 `from`、`to`、`status`、`api_key_id`、`provider_id`、`model_id`、`limit`、`offset` 查询参数。
+支持 `from`、`to`、`status`、`error_code`、`request_model`、`api_key_id`、`provider_id`、`model_id`、`limit`、`cursor` 查询参数。分页使用 cursor，基于 `started_at` 和 `id`。
 
 RequestLog 只保存元数据、hash、状态、延迟和资源 ID，不保存 Prompt 或 Response 原文。
 
@@ -193,6 +263,15 @@ RequestLog 只保存元数据、hash、状态、延迟和资源 ID，不保存 P
 支持 `group_by=provider|model|api_key`，以及 `from`、`to` 时间窗口。
 
 返回 `request_count`、`success_count`、`error_count`、token 聚合、`total_cost_micro_usd` 和平均延迟。
+
+### Analytics
+
+- `GET /api/v1/admin/analytics/daily-cost`
+- `GET /api/v1/admin/analytics/model-cost-breakdown`
+- `GET /api/v1/admin/analytics/provider-latency`
+- `GET /api/v1/admin/analytics/error-rate`
+
+ClickHouse analytics 可选启用；未启用时使用 PostgreSQL 查询。
 
 ## Gateway API
 
@@ -216,12 +295,17 @@ Authorization: Bearer <DEMO_API_KEY>
 }
 ```
 
-响应包含 OpenAI-compatible 风格的 `choices`、`usage`，以及网关追加的 `provider`、`cost`、`request_id`。
+非流式响应包含 OpenAI-compatible 风格的 `choices`、`usage`，以及网关追加的 `provider`、`cost`、`request_id`。
 
-v0.1 行为：
+当前行为：
 
-- `stream=true` 返回 `stream_not_supported`。
+- `stream=true` 返回 OpenAI-compatible SSE。
 - route 不存在返回 `route_not_found`。
 - API Key 超 RPM 返回 `rate_limit_exceeded`。
 - block budget 超限返回 `budget_exceeded`。
+- API Key quota 超限返回 `api_key_quota_exceeded`。
+- 内容策略阻断返回 `content_policy_blocked`。
+- 异常成本阻断返回 `cost_anomaly_blocked`。
+- fallback/retry 只对可重试上游错误生效，不对认证错误重试。
+- cache hit 不调用上游 Provider，仍记录 request log 和 cache event。
 - 成本以 micro USD 整数计算和返回。

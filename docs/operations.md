@@ -1,8 +1,8 @@
-# Operations Guide
+# 运维与本地开发指南
 
-本文档记录本地开发和阶段 1 演示所需的常用操作。
+本文档记录本地开发、演示和验收所需的常用操作。
 
-## Requirements
+## 环境要求
 
 - Go 1.22+
 - Node.js 22+
@@ -11,7 +11,7 @@
 - `curl`
 - `jq`
 
-## Local Stack
+## 本地服务
 
 启动本地依赖和服务：
 
@@ -21,7 +21,7 @@ make up
 
 服务地址：
 
-| Service | URL |
+| 服务 | 地址 |
 |---|---|
 | Gateway | `http://localhost:8080` |
 | Console | `http://localhost:3000` |
@@ -35,7 +35,7 @@ make up
 make down
 ```
 
-## Migrations
+## 数据库迁移
 
 应用迁移：
 
@@ -55,7 +55,7 @@ make migrate-down
 make verify-migration
 ```
 
-## Demo Data
+## 演示数据
 
 创建一套可演示的租户、Admin Token、Gateway API Key、Mock Provider、Model、RoutePolicy 和 Budget：
 
@@ -91,7 +91,7 @@ make smoke-test
 4. 使用 Admin Token 查询 request logs。
 5. 使用 Admin Token 查询 usage summary。
 
-## Tests
+## 测试
 
 后端测试：
 
@@ -99,7 +99,7 @@ make smoke-test
 make test
 ```
 
-全量 Go 测试：
+仓库包含前端依赖目录，日常后端测试建议使用 `make test`。如需运行全量 Go 测试：
 
 ```bash
 go test ./...
