@@ -23,6 +23,79 @@ test("injects bearer token into admin requests", async () => {
   assert.equal(calls[0].init.headers.Authorization, "Bearer llmgw_admin_test");
 });
 
+test("posts passwordless mock login without bearer token", async () => {
+  const calls = [];
+  const client = createApiClient({
+    baseUrl: "http://gateway.test",
+    getToken: () => null,
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return new Response(
+        JSON.stringify({
+          token: "llmgw_session_plain",
+          token_type: "session",
+          expires_at: "2026-05-22T00:00:00Z",
+          org_id: "00000000-0000-0000-0000-000000000001",
+          org_slug: "demo-org",
+          user_id: "00000000-0000-0000-0000-000000000002",
+          email: "owner@example.com",
+          display_name: "Owner",
+          membership_id: "00000000-0000-0000-0000-000000000003",
+          role: "owner"
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  });
+
+  const result = await client.passwordlessMockLogin({
+    org_slug: "demo-org",
+    email: "owner@example.com"
+  });
+
+  assert.equal(calls[0].url, "http://gateway.test/api/v1/admin/sessions/passwordless-mock");
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal("Authorization" in calls[0].init.headers, false);
+  assert.equal(JSON.parse(calls[0].init.body).org_slug, "demo-org");
+  assert.equal(result.token, "llmgw_session_plain");
+});
+
+test("creates member through admin API", async () => {
+  const calls = [];
+  const client = createApiClient({
+    baseUrl: "http://gateway.test",
+    getToken: () => "llmgw_session_test",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return new Response(
+        JSON.stringify({
+          membership_id: "00000000-0000-0000-0000-000000000003",
+          org_id: "00000000-0000-0000-0000-000000000001",
+          user_id: "00000000-0000-0000-0000-000000000002",
+          email: "admin@example.com",
+          display_name: "Admin",
+          role: "admin",
+          status: "active",
+          created_at: "2026-05-21T00:00:00Z",
+          updated_at: "2026-05-21T00:00:00Z"
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  });
+
+  const created = await client.createMember({
+    email: "admin@example.com",
+    display_name: "Admin",
+    role: "admin"
+  });
+
+  assert.equal(calls[0].url, "http://gateway.test/api/v1/admin/members");
+  assert.equal(calls[0].init.headers.Authorization, "Bearer llmgw_session_test");
+  assert.equal(JSON.parse(calls[0].init.body).role, "admin");
+  assert.equal(created.email, "admin@example.com");
+});
+
 test("returns plaintext API key from create response once to caller", async () => {
   const client = createApiClient({
     baseUrl: "",

@@ -1,6 +1,7 @@
 import type {
   APIKey,
   APIKeyCreateResponse,
+  AdminMe,
   AdminAuditLog,
   AnalyticsDailyCostResponse,
   AnalyticsErrorRateResponse,
@@ -16,11 +17,15 @@ import type {
   CreateBudgetAlertRequest,
   CreateBudgetRequest,
   CreateContentPolicyRequest,
+  CreateMemberRequest,
   CreateModelRequest,
   CreateProviderRequest,
   CreateRoutePolicyRequest,
   ListResponse,
+  Member,
   Model,
+  PasswordlessMockLoginRequest,
+  PasswordlessMockLoginResponse,
   Provider,
   RequestLogsResponse,
   RoutePolicy,
@@ -71,6 +76,21 @@ export function createApiClient(options: ApiClientOptions) {
   }
 
   return {
+    getMe: () => request<AdminMe>("/api/v1/admin/me"),
+    passwordlessMockLogin: (body: PasswordlessMockLoginRequest) =>
+      request<PasswordlessMockLoginResponse>(
+        "/api/v1/admin/sessions/passwordless-mock",
+        {
+          method: "POST",
+          body: JSON.stringify(body)
+        }
+      ),
+    listMembers: () => request<ListResponse<Member>>("/api/v1/admin/members"),
+    createMember: (body: CreateMemberRequest) =>
+      request<Member>("/api/v1/admin/members", {
+        method: "POST",
+        body: JSON.stringify(body)
+      }),
     listAPIKeys: () => request<ListResponse<APIKey>>("/api/v1/admin/api-keys"),
     createAPIKey: (body: CreateAPIKeyRequest) =>
       request<APIKeyCreateResponse>("/api/v1/admin/api-keys", {

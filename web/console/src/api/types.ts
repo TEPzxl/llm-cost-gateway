@@ -4,6 +4,66 @@ export type ListResponse<T> = {
   items: T[];
 };
 
+export type AdminRole = "owner" | "admin" | "viewer" | string;
+
+export type AdminMe = {
+  org: {
+    id: ID;
+    name: string;
+    slug: string;
+  };
+  actor_type: "service_token" | "user" | string;
+  role: AdminRole;
+  admin_token?: {
+    id: ID;
+    name: string;
+    scopes: string[];
+  } | null;
+  user?: {
+    id: ID;
+    email: string;
+    display_name: string;
+    membership_id?: ID | null;
+    session_id?: ID | null;
+  } | null;
+};
+
+export type Member = {
+  membership_id: ID;
+  org_id: ID;
+  user_id: ID;
+  email: string;
+  display_name: string;
+  role: AdminRole;
+  status: "active" | "disabled" | string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateMemberRequest = {
+  email: string;
+  display_name: string;
+  role: "owner" | "admin" | "viewer";
+};
+
+export type PasswordlessMockLoginRequest = {
+  org_slug: string;
+  email: string;
+};
+
+export type PasswordlessMockLoginResponse = {
+  token: string;
+  token_type: "session" | string;
+  expires_at: string;
+  org_id: ID;
+  org_slug: string;
+  user_id: ID;
+  email: string;
+  display_name: string;
+  membership_id: ID;
+  role: AdminRole;
+};
+
 export type APIKey = {
   id: ID;
   name: string;
@@ -169,7 +229,8 @@ export type BudgetAlertDelivery = {
 
 export type AdminAuditLog = {
   id: ID;
-  actor_admin_token_id: ID;
+  actor_admin_token_id?: ID | null;
+  actor_user_id?: ID | null;
   action: string;
   resource_type: string;
   resource_id?: ID | null;

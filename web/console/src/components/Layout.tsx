@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
+import type { AdminMe } from "../api/types";
 
 export type ConsolePage =
   | "dashboard"
+  | "members"
   | "api-keys"
   | "providers"
   | "models"
@@ -16,6 +18,7 @@ export type ConsolePage =
 
 type LayoutProps = {
   activePage: ConsolePage;
+  me: AdminMe | null;
   onNavigate: (page: ConsolePage) => void;
   onLogout: () => void;
   children: ReactNode;
@@ -23,6 +26,7 @@ type LayoutProps = {
 
 const navItems: Array<{ id: ConsolePage; label: string }> = [
   { id: "dashboard", label: "Dashboard" },
+  { id: "members", label: "Members" },
   { id: "api-keys", label: "API Keys" },
   { id: "providers", label: "Providers" },
   { id: "models", label: "Models" },
@@ -38,10 +42,12 @@ const navItems: Array<{ id: ConsolePage; label: string }> = [
 
 export function Layout({
   activePage,
+  me,
   onNavigate,
   onLogout,
   children
 }: LayoutProps) {
+  const visibleItems = navItems.filter((item) => canAccessPage(item.id, me));
   const activeLabel =
     navItems.find((item) => item.id === activePage)?.label ?? "Dashboard";
 
@@ -56,7 +62,7 @@ export function Layout({
           </div>
         </div>
         <nav className="sidebar-nav" aria-label="Console navigation">
-          {navItems.map((item) => (
+          {visibleItems.map((item) => (
             <button
               key={item.id}
               className={item.id === activePage ? "nav-item active" : "nav-item"}
@@ -77,9 +83,47 @@ export function Layout({
             <p className="eyebrow">Tenant Admin</p>
             <h1>{activeLabel}</h1>
           </div>
+          {me && (
+            <div className="principal-chip">
+              <span>{me.actor_type === "service_token" ? "Service Token" : me.user?.email}</span>
+              <strong>{roleLabel(me.role)}</strong>
+            </div>
+          )}
         </header>
         <div className="content-body">{children}</div>
       </section>
     </main>
   );
+}
+
+export function canAccessPage(page: ConsolePage, me: AdminMe | null) {
+  if (!me) {
+    return true;
+  }
+  if (me.actor_type === "service_token") {
+    return true;
+  }
+  if (page === "dashboard" || page === "audit-logs" || page === "cache" || page === "request-logs" || page === "usage-summary") {
+    return true;
+  }
+  if (page === "members") {
+    return me.role === "owner" || me.role === "admin";
+  }
+  if (page === "api-keys") {
+    return me.role === "owner";
+  }
+  return me.role === "owner" || me.role === "admin";
+}
+
+function roleLabel(role: string) {
+  switch (role) {
+    case "owner":
+      return "Owner";
+    case "admin":
+      return "Admin";
+    case "viewer":
+      return "Viewer";
+    default:
+      return role || "Owner";
+  }
 }

@@ -29,6 +29,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -148,6 +153,22 @@ th {
   letter-spacing: 0;
 }
 
+.principal-chip {
+  display: grid;
+  gap: 2px;
+  justify-items: end;
+  border: 1px solid #dce4ef;
+  border-radius: 6px;
+  background: #f7f9fc;
+  color: #526174;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.principal-chip strong {
+  color: #152033;
+}
+
 .content-body {
   padding: 22px 28px 36px;
 }
@@ -166,6 +187,10 @@ th {
   background: #ffffff;
   padding: 26px;
   box-shadow: 0 12px 34px rgb(15 23 42 / 8%);
+}
+
+.login-mode {
+  margin-top: 18px;
 }
 
 .field {
