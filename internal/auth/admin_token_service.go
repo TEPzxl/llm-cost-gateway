@@ -55,17 +55,32 @@ type CreateAdminTokenResult struct {
 }
 
 type AdminTokenService struct {
-	queries *db.Queries
-	hasher  TokenHasher
-	now     func() time.Time
+	queries     *db.Queries
+	hashKeyRing *TokenHashKeyRing
+	now         func() time.Time
 }
 
-func NewAdminTokenService(queries *db.Queries, tokenHashSecret string) *AdminTokenService {
-	return &AdminTokenService{
-		queries: queries,
-		hasher:  NewTokenHasher(tokenHashSecret),
-		now:     func() time.Time { return time.Now().UTC() },
+type AdminTokenServiceOption func(*AdminTokenService)
+
+func WithAdminTokenHashKeyRing(keyRing *TokenHashKeyRing) AdminTokenServiceOption {
+	return func(s *AdminTokenService) {
+		if keyRing != nil {
+			s.hashKeyRing = keyRing
+		}
 	}
+}
+
+func NewAdminTokenService(queries *db.Queries, tokenHashSecret string, opts ...AdminTokenServiceOption) *AdminTokenService {
+	keyRing, _ := NewSingleTokenHashKeyRing(tokenHashSecret)
+	service := &AdminTokenService{
+		queries:     queries,
+		hashKeyRing: keyRing,
+		now:         func() time.Time { return time.Now().UTC() },
+	}
+	for _, opt := range opts {
+		opt(service)
+	}
+	return service
 }
 
 func (s *AdminTokenService) CreateAdminToken(ctx context.Context, params CreateAdminTokenParams) (CreateAdminTokenResult, error) {
@@ -98,7 +113,7 @@ func (s *AdminTokenService) CreateAdminToken(ctx context.Context, params CreateA
 		OrgID:       params.OrgID,
 		Name:        name,
 		TokenPrefix: visibleCredentialPrefix(token, AdminTokenPlainPrefix),
-		TokenHash:   s.hasher.Hash(token),
+		TokenHash:   s.hashKeyRing.Hash(token),
 		Scopes:      scopes,
 		Status:      "active",
 		ExpiresAt:   params.ExpiresAt,
@@ -120,12 +135,22 @@ func (s *AdminTokenService) Authenticate(ctx context.Context, token string) (Adm
 		return AdminTokenPrincipal{}, ErrInvalidToken
 	}
 
-	adminToken, err := s.queries.GetAdminTokenByHash(ctx, s.hasher.Hash(token))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return AdminTokenPrincipal{}, ErrInvalidToken
+	var adminToken db.AdminToken
+	var found bool
+	for _, tokenHash := range s.hashKeyRing.CandidateHashes(token) {
+		item, err := s.queries.GetAdminTokenByHash(ctx, tokenHash)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return AdminTokenPrincipal{}, err
 		}
-		return AdminTokenPrincipal{}, err
+		adminToken = item
+		found = true
+		break
+	}
+	if !found {
+		return AdminTokenPrincipal{}, ErrInvalidToken
 	}
 	if adminToken.Status != "active" {
 		return AdminTokenPrincipal{}, ErrInvalidToken

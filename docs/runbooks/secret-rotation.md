@@ -2,9 +2,7 @@
 
 ## 适用范围
 
-本文档覆盖 Provider API Key 的加密密钥轮换。当前实现使用 `provider_secrets.key_version` 标记密文使用的 AES-GCM key version。
-
-Token hash secret 的双读单写轮换将在后续任务中补齐。
+本文档覆盖 Provider API Key 的加密密钥轮换，以及 Admin Token、Gateway API Key、user session、magic link token 的 hash secret 双读单写轮换。
 
 ## 配置
 
@@ -14,6 +12,9 @@ Token hash secret 的双读单写轮换将在后续任务中补齐。
 secret_encryption_key: 0123456789abcdef0123456789abcdef
 secret_encryption_key_version: 1
 secret_encryption_keyring: ""
+token_hash_secret: change-me-token-hash-secret
+token_hash_secret_version: 1
+token_hash_secret_keyring: ""
 ```
 
 轮换到 version 2：
@@ -22,9 +23,18 @@ secret_encryption_keyring: ""
 secret_encryption_key: fedcba98765432100123456789abcdef
 secret_encryption_key_version: 2
 secret_encryption_keyring: "1:0123456789abcdef0123456789abcdef,2:fedcba98765432100123456789abcdef"
+token_hash_secret: new-token-hash-secret
+token_hash_secret_version: 2
+token_hash_secret_keyring: "1:old-token-hash-secret,2:new-token-hash-secret"
 ```
 
 生产环境必须保证 active version 存在于 keyring 中。旧 version 在所有 Provider secret 完成 re-encryption 之前不能删除。
+
+Token hash secret 轮换采用双读单写：
+
+- 新创建的 Admin Token、Gateway API Key、session 和 magic link token 使用 active secret 写入 hash。
+- 认证时会尝试 keyring 中所有 secret，因此 grace period 内旧 token 仍可用。
+- grace period 结束后，删除旧 secret 前应确认旧 token 已过期、撤销或重新签发。
 
 ## Dry Run
 

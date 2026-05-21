@@ -43,17 +43,32 @@ type CreateAPIKeyResult struct {
 }
 
 type APIKeyService struct {
-	queries *db.Queries
-	hasher  TokenHasher
-	now     func() time.Time
+	queries     *db.Queries
+	hashKeyRing *TokenHashKeyRing
+	now         func() time.Time
 }
 
-func NewAPIKeyService(queries *db.Queries, tokenHashSecret string) *APIKeyService {
-	return &APIKeyService{
-		queries: queries,
-		hasher:  NewTokenHasher(tokenHashSecret),
-		now:     func() time.Time { return time.Now().UTC() },
+type APIKeyServiceOption func(*APIKeyService)
+
+func WithAPIKeyHashKeyRing(keyRing *TokenHashKeyRing) APIKeyServiceOption {
+	return func(s *APIKeyService) {
+		if keyRing != nil {
+			s.hashKeyRing = keyRing
+		}
 	}
+}
+
+func NewAPIKeyService(queries *db.Queries, tokenHashSecret string, opts ...APIKeyServiceOption) *APIKeyService {
+	keyRing, _ := NewSingleTokenHashKeyRing(tokenHashSecret)
+	service := &APIKeyService{
+		queries:     queries,
+		hashKeyRing: keyRing,
+		now:         func() time.Time { return time.Now().UTC() },
+	}
+	for _, opt := range opts {
+		opt(service)
+	}
+	return service
 }
 
 func (s *APIKeyService) CreateAPIKey(ctx context.Context, params CreateAPIKeyParams) (CreateAPIKeyResult, error) {
@@ -93,7 +108,7 @@ func (s *APIKeyService) CreateAPIKey(ctx context.Context, params CreateAPIKeyPar
 		OrgID:                    params.OrgID,
 		Name:                     name,
 		KeyPrefix:                visibleCredentialPrefix(key, APIKeyPlainPrefix),
-		KeyHash:                  s.hasher.Hash(key),
+		KeyHash:                  s.hashKeyRing.Hash(key),
 		Scopes:                   scopes,
 		Status:                   "active",
 		RpmLimit:                 params.RPMLimit,
@@ -139,12 +154,22 @@ func (s *APIKeyService) Authenticate(ctx context.Context, key string) (APIKeyPri
 		return APIKeyPrincipal{}, ErrInvalidAPIKey
 	}
 
-	apiKey, err := s.queries.GetAPIKeyByHash(ctx, s.hasher.Hash(key))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return APIKeyPrincipal{}, ErrInvalidAPIKey
+	var apiKey db.ApiKey
+	var found bool
+	for _, keyHash := range s.hashKeyRing.CandidateHashes(key) {
+		item, err := s.queries.GetAPIKeyByHash(ctx, keyHash)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return APIKeyPrincipal{}, err
 		}
-		return APIKeyPrincipal{}, err
+		apiKey = item
+		found = true
+		break
+	}
+	if !found {
+		return APIKeyPrincipal{}, ErrInvalidAPIKey
 	}
 	if apiKey.Status != "active" {
 		return APIKeyPrincipal{}, ErrInvalidAPIKey

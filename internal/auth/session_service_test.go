@@ -127,6 +127,47 @@ func TestSessionServicePasswordlessMockLoginAuthenticatesSession(t *testing.T) {
 	}
 }
 
+func TestSessionServiceAuthenticatesSessionHashedWithOldSecret(t *testing.T) {
+	ctx := context.Background()
+	st := openAuthTestStore(t, ctx)
+	resetAuthTestDatabase(t, ctx, st)
+	org := createAuthTestOrganization(t, ctx, st, "auth-session-rotation")
+
+	oldService := NewSessionService(st.Queries, "old-token-hash-secret")
+	member, err := oldService.UpsertMember(ctx, UpsertMemberParams{
+		OrgID:       org.ID,
+		Email:       "viewer@example.com",
+		DisplayName: "Viewer",
+		Role:        RoleViewer,
+	})
+	if err != nil {
+		t.Fatalf("UpsertMember returned error: %v", err)
+	}
+	login, err := oldService.PasswordlessMockLogin(ctx, PasswordlessMockLoginParams{
+		OrgSlug: org.Slug,
+		Email:   member.User.Email,
+	})
+	if err != nil {
+		t.Fatalf("PasswordlessMockLogin returned error: %v", err)
+	}
+	keyRing, err := NewTokenHashKeyRing(2, map[int32]string{
+		1: "old-token-hash-secret",
+		2: "new-token-hash-secret",
+	})
+	if err != nil {
+		t.Fatalf("NewTokenHashKeyRing returned error: %v", err)
+	}
+	newService := NewSessionService(st.Queries, "new-token-hash-secret", WithSessionHashKeyRing(keyRing))
+
+	principal, err := newService.Authenticate(ctx, login.Token)
+	if err != nil {
+		t.Fatalf("Authenticate returned error: %v", err)
+	}
+	if principal.SessionID == nil || *principal.SessionID != login.Session.ID {
+		t.Fatalf("principal session id = %v, want %s", principal.SessionID, login.Session.ID)
+	}
+}
+
 func TestSessionServicePasswordlessMockLoginRejectsUnknownMember(t *testing.T) {
 	ctx := context.Background()
 	st := openAuthTestStore(t, ctx)

@@ -60,6 +60,40 @@ func TestAPIKeyServiceCreatesAndAuthenticatesKey(t *testing.T) {
 	}
 }
 
+func TestAPIKeyServiceAuthenticatesKeyHashedWithOldSecret(t *testing.T) {
+	ctx := context.Background()
+	st := openAPIKeyTestStore(t, ctx)
+	resetAuthTestDatabase(t, ctx, st)
+	org := createAuthTestOrganization(t, ctx, st, "auth-api-key-rotation")
+
+	oldService := NewAPIKeyService(st.Queries, "old-token-hash-secret")
+	created, err := oldService.CreateAPIKey(ctx, CreateAPIKeyParams{
+		OrgID:    org.ID,
+		Name:     "old-api-key",
+		Scopes:   []string{"chat.completions"},
+		RPMLimit: 60,
+	})
+	if err != nil {
+		t.Fatalf("CreateAPIKey returned error: %v", err)
+	}
+	keyRing, err := NewTokenHashKeyRing(2, map[int32]string{
+		1: "old-token-hash-secret",
+		2: "new-token-hash-secret",
+	})
+	if err != nil {
+		t.Fatalf("NewTokenHashKeyRing returned error: %v", err)
+	}
+	newService := NewAPIKeyService(st.Queries, "new-token-hash-secret", WithAPIKeyHashKeyRing(keyRing))
+
+	principal, err := newService.Authenticate(ctx, created.Key)
+	if err != nil {
+		t.Fatalf("Authenticate returned error: %v", err)
+	}
+	if principal.APIKeyID != created.APIKey.ID {
+		t.Fatalf("principal api key id = %s, want %s", principal.APIKeyID, created.APIKey.ID)
+	}
+}
+
 func TestAPIKeyServiceRejectsExpiredKey(t *testing.T) {
 	ctx := context.Background()
 	st := openAPIKeyTestStore(t, ctx)

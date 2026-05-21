@@ -28,12 +28,12 @@ type MagicLinkConfig struct {
 }
 
 type MagicLinkService struct {
-	store  *store.Store
-	hasher TokenHasher
-	sender email.Sender
-	config MagicLinkConfig
-	now    func() time.Time
-	ttl    time.Duration
+	store       *store.Store
+	hashKeyRing *TokenHashKeyRing
+	sender      email.Sender
+	config      MagicLinkConfig
+	now         func() time.Time
+	ttl         time.Duration
 }
 
 type MagicLinkServiceOption func(*MagicLinkService)
@@ -46,18 +46,27 @@ func WithMagicLinkClock(clock func() time.Time) MagicLinkServiceOption {
 	}
 }
 
+func WithMagicLinkHashKeyRing(keyRing *TokenHashKeyRing) MagicLinkServiceOption {
+	return func(s *MagicLinkService) {
+		if keyRing != nil {
+			s.hashKeyRing = keyRing
+		}
+	}
+}
+
 func NewMagicLinkService(st *store.Store, tokenHashSecret string, sender email.Sender, config MagicLinkConfig, opts ...MagicLinkServiceOption) *MagicLinkService {
 	ttl := config.TTL
 	if ttl <= 0 {
 		ttl = defaultMagicLinkTTL
 	}
+	keyRing, _ := NewSingleTokenHashKeyRing(tokenHashSecret)
 	service := &MagicLinkService{
-		store:  st,
-		hasher: NewTokenHasher(tokenHashSecret),
-		sender: sender,
-		config: config,
-		now:    func() time.Time { return time.Now().UTC() },
-		ttl:    ttl,
+		store:       st,
+		hashKeyRing: keyRing,
+		sender:      sender,
+		config:      config,
+		now:         func() time.Time { return time.Now().UTC() },
+		ttl:         ttl,
 	}
 	for _, opt := range opts {
 		opt(service)
@@ -106,7 +115,7 @@ func (s *MagicLinkService) Request(ctx context.Context, params MagicLinkRequestP
 		UserID:      membership.UserID,
 		Email:       membership.Email,
 		TokenPrefix: visibleCredentialPrefix(token, MagicLinkPlainPrefix),
-		TokenHash:   s.hasher.Hash(token),
+		TokenHash:   s.hashKeyRing.Hash(token),
 		Status:      "active",
 		ExpiresAt:   now.Add(s.ttl),
 		CreatedAt:   now,
@@ -134,23 +143,33 @@ func (s *MagicLinkService) Consume(ctx context.Context, params MagicLinkConsumeP
 	now := s.now()
 	var result PasswordlessMockLoginResult
 	err = s.store.ExecTx(ctx, func(q *db.Queries) error {
-		magicLink, err := q.ConsumeMagicLinkToken(ctx, db.ConsumeMagicLinkTokenParams{
-			TokenHash:  s.hasher.Hash(token),
-			ConsumedAt: now,
-			Now:        now,
-		})
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrInvalidMagicLink
+		var magicLink db.ConsumeMagicLinkTokenRow
+		var found bool
+		for _, tokenHash := range s.hashKeyRing.CandidateHashes(token) {
+			item, err := q.ConsumeMagicLinkToken(ctx, db.ConsumeMagicLinkTokenParams{
+				TokenHash:  tokenHash,
+				ConsumedAt: now,
+				Now:        now,
+			})
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					continue
+				}
+				return err
 			}
-			return err
+			magicLink = item
+			found = true
+			break
+		}
+		if !found {
+			return ErrInvalidMagicLink
 		}
 		session, err := q.CreateUserSession(ctx, db.CreateUserSessionParams{
 			ID:          uuid.New(),
 			OrgID:       magicLink.OrgID,
 			UserID:      magicLink.UserID,
 			TokenPrefix: visibleCredentialPrefix(sessionToken, SessionPlainPrefix),
-			TokenHash:   s.hasher.Hash(sessionToken),
+			TokenHash:   s.hashKeyRing.Hash(sessionToken),
 			Status:      "active",
 			ExpiresAt:   now.Add(defaultSessionTTL),
 			CreatedAt:   now,

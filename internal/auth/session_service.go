@@ -23,10 +23,10 @@ var (
 )
 
 type SessionService struct {
-	queries *db.Queries
-	hasher  TokenHasher
-	now     func() time.Time
-	ttl     time.Duration
+	queries     *db.Queries
+	hashKeyRing *TokenHashKeyRing
+	now         func() time.Time
+	ttl         time.Duration
 }
 
 type SessionServiceOption func(*SessionService)
@@ -47,12 +47,21 @@ func WithSessionTTL(ttl time.Duration) SessionServiceOption {
 	}
 }
 
+func WithSessionHashKeyRing(keyRing *TokenHashKeyRing) SessionServiceOption {
+	return func(s *SessionService) {
+		if keyRing != nil {
+			s.hashKeyRing = keyRing
+		}
+	}
+}
+
 func NewSessionService(queries *db.Queries, tokenHashSecret string, opts ...SessionServiceOption) *SessionService {
+	keyRing, _ := NewSingleTokenHashKeyRing(tokenHashSecret)
 	service := &SessionService{
-		queries: queries,
-		hasher:  NewTokenHasher(tokenHashSecret),
-		now:     func() time.Time { return time.Now().UTC() },
-		ttl:     defaultSessionTTL,
+		queries:     queries,
+		hashKeyRing: keyRing,
+		now:         func() time.Time { return time.Now().UTC() },
+		ttl:         defaultSessionTTL,
 	}
 	for _, opt := range opts {
 		opt(service)
@@ -173,7 +182,7 @@ func (s *SessionService) PasswordlessMockLogin(ctx context.Context, params Passw
 		OrgID:       membership.OrgID,
 		UserID:      membership.UserID,
 		TokenPrefix: visibleCredentialPrefix(token, SessionPlainPrefix),
-		TokenHash:   s.hasher.Hash(token),
+		TokenHash:   s.hashKeyRing.Hash(token),
 		Status:      "active",
 		ExpiresAt:   now.Add(s.ttl),
 		CreatedAt:   now,
@@ -199,12 +208,22 @@ func (s *SessionService) Authenticate(ctx context.Context, token string) (AdminT
 	if token == "" {
 		return AdminTokenPrincipal{}, ErrInvalidSession
 	}
-	session, err := s.queries.GetUserSessionByHash(ctx, s.hasher.Hash(token))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return AdminTokenPrincipal{}, ErrInvalidSession
+	var session db.GetUserSessionByHashRow
+	var found bool
+	for _, tokenHash := range s.hashKeyRing.CandidateHashes(token) {
+		item, err := s.queries.GetUserSessionByHash(ctx, tokenHash)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return AdminTokenPrincipal{}, err
 		}
-		return AdminTokenPrincipal{}, err
+		session = item
+		found = true
+		break
+	}
+	if !found {
+		return AdminTokenPrincipal{}, ErrInvalidSession
 	}
 	if session.Status != "active" || session.MembershipStatus != "active" || session.UserStatus != "active" {
 		return AdminTokenPrincipal{}, ErrInvalidSession

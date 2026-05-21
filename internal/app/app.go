@@ -9,6 +9,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/tep/llm-cost-gateway/internal/analytics"
+	"github.com/tep/llm-cost-gateway/internal/auth"
 	promptcache "github.com/tep/llm-cost-gateway/internal/cache"
 	"github.com/tep/llm-cost-gateway/internal/config"
 	secretcrypto "github.com/tep/llm-cost-gateway/internal/crypto"
@@ -118,11 +119,16 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 	if err != nil {
 		return nil, fmt.Errorf("init secret keyring: %w", err)
 	}
+	tokenHashKeyRing, err := newTokenHashKeyRing(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("init token hash keyring: %w", err)
+	}
 
 	router := NewRouter(RouterConfig{
 		AppEnv:                   cfg.AppEnv,
 		PlatformBootstrapToken:   cfg.PlatformBootstrapToken,
 		TokenHashSecret:          cfg.TokenHashSecret,
+		TokenHashKeyRing:         tokenHashKeyRing,
 		SecretEncryptionKey:      cfg.SecretEncryptionKey,
 		SecretKeyRing:            secretKeyRing,
 		MaxRetries:               cfg.MaxRetries,
@@ -159,6 +165,18 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 		events: multiCloser(usageEventCloser, analyticsCloser),
 		traces: tracerProvider,
 	}, nil
+}
+
+func newTokenHashKeyRing(cfg Config) (*auth.TokenHashKeyRing, error) {
+	secrets, err := cfg.TokenHashSecrets()
+	if err != nil {
+		return nil, err
+	}
+	version := cfg.TokenHashSecretVersion
+	if version <= 0 {
+		version = 1
+	}
+	return auth.NewTokenHashKeyRing(int32(version), secrets)
 }
 
 func newSecretKeyRing(cfg Config) (*secretcrypto.SecretKeyRing, error) {

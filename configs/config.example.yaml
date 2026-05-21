@@ -4,6 +4,8 @@ database_url: postgres://llmgw:llmgw@localhost:5432/llmgw?sslmode=disable
 redis_url: redis://localhost:6379/0
 platform_bootstrap_token: change-me-bootstrap-token
 token_hash_secret: change-me-token-hash-secret
+token_hash_secret_version: 1
+token_hash_secret_keyring: ""
 secret_encryption_key: 0123456789abcdef0123456789abcdef
 secret_encryption_key_version: 1
 secret_encryption_keyring: ""

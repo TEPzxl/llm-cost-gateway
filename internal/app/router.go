@@ -36,6 +36,7 @@ type RouterConfig struct {
 	AppEnv                   string
 	PlatformBootstrapToken   string
 	TokenHashSecret          string
+	TokenHashKeyRing         *auth.TokenHashKeyRing
 	SecretEncryptionKey      string
 	SecretKeyRing            *secretcrypto.SecretKeyRing
 	MaxRetries               int
@@ -95,7 +96,7 @@ func NewRouter(cfg RouterConfig, logger *zap.Logger) *gin.Engine {
 }
 
 func registerGatewayRoutes(router *gin.Engine, cfg RouterConfig) {
-	apiKeyService := auth.NewAPIKeyService(cfg.Store.Queries, cfg.TokenHashSecret)
+	apiKeyService := auth.NewAPIKeyService(cfg.Store.Queries, cfg.TokenHashSecret, auth.WithAPIKeyHashKeyRing(cfg.TokenHashKeyRing))
 	meteringService := metering.NewService(
 		cfg.Store,
 		costing.NewCalculator(),
@@ -126,7 +127,7 @@ func registerGatewayRoutes(router *gin.Engine, cfg RouterConfig) {
 }
 
 func registerPlatformRoutes(router *gin.Engine, cfg RouterConfig) {
-	adminTokenService := auth.NewAdminTokenService(cfg.Store.Queries, cfg.TokenHashSecret)
+	adminTokenService := auth.NewAdminTokenService(cfg.Store.Queries, cfg.TokenHashSecret, auth.WithAdminTokenHashKeyRing(cfg.TokenHashKeyRing))
 	orgHandler := platform.NewOrgHandler(cfg.Store.Queries)
 	adminTokenHandler := platform.NewAdminTokenHandler(adminTokenService)
 
@@ -137,16 +138,16 @@ func registerPlatformRoutes(router *gin.Engine, cfg RouterConfig) {
 }
 
 func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
-	adminTokenService := auth.NewAdminTokenService(cfg.Store.Queries, cfg.TokenHashSecret)
-	sessionService := auth.NewSessionService(cfg.Store.Queries, cfg.TokenHashSecret)
+	adminTokenService := auth.NewAdminTokenService(cfg.Store.Queries, cfg.TokenHashSecret, auth.WithAdminTokenHashKeyRing(cfg.TokenHashKeyRing))
+	sessionService := auth.NewSessionService(cfg.Store.Queries, cfg.TokenHashSecret, auth.WithSessionHashKeyRing(cfg.TokenHashKeyRing))
 	var magicLinkService *auth.MagicLinkService
 	if cfg.PasswordlessEmailEnabled && cfg.EmailSender != nil {
 		magicLinkService = auth.NewMagicLinkService(cfg.Store, cfg.TokenHashSecret, cfg.EmailSender, auth.MagicLinkConfig{
 			BaseURL: cfg.MagicLinkBaseURL,
 			TTL:     cfg.MagicLinkTTL,
-		})
+		}, auth.WithMagicLinkHashKeyRing(cfg.TokenHashKeyRing))
 	}
-	apiKeyService := auth.NewAPIKeyService(cfg.Store.Queries, cfg.TokenHashSecret)
+	apiKeyService := auth.NewAPIKeyService(cfg.Store.Queries, cfg.TokenHashSecret, auth.WithAPIKeyHashKeyRing(cfg.TokenHashKeyRing))
 	publicOutboundOnly := cfg.AppEnv == "production"
 	providerService := provider.NewService(cfg.Store, cfg.SecretEncryptionKey, provider.WithPublicOutboundOnly(publicOutboundOnly), provider.WithSecretKeyRing(cfg.SecretKeyRing))
 	providerHealthService := provider.NewHealthService(cfg.Store, cfg.SecretEncryptionKey, provider.WithHealthPublicOutboundOnly(publicOutboundOnly), provider.WithHealthSecretKeyRing(cfg.SecretKeyRing))

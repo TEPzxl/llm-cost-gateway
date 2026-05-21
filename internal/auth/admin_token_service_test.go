@@ -60,6 +60,38 @@ func TestAdminTokenServiceCreatesAndAuthenticatesToken(t *testing.T) {
 	}
 }
 
+func TestAdminTokenServiceAuthenticatesTokenHashedWithOldSecret(t *testing.T) {
+	ctx := context.Background()
+	st := openAuthTestStore(t, ctx)
+	resetAuthTestDatabase(t, ctx, st)
+	org := createAuthTestOrganization(t, ctx, st, "admin-token-rotation")
+
+	oldService := NewAdminTokenService(st.Queries, "old-token-hash-secret")
+	created, err := oldService.CreateAdminToken(ctx, CreateAdminTokenParams{
+		OrgID: org.ID,
+		Name:  "old-token",
+	})
+	if err != nil {
+		t.Fatalf("CreateAdminToken returned error: %v", err)
+	}
+	keyRing, err := NewTokenHashKeyRing(2, map[int32]string{
+		1: "old-token-hash-secret",
+		2: "new-token-hash-secret",
+	})
+	if err != nil {
+		t.Fatalf("NewTokenHashKeyRing returned error: %v", err)
+	}
+	newService := NewAdminTokenService(st.Queries, "new-token-hash-secret", WithAdminTokenHashKeyRing(keyRing))
+
+	principal, err := newService.Authenticate(ctx, created.Token)
+	if err != nil {
+		t.Fatalf("Authenticate returned error: %v", err)
+	}
+	if principal.AdminTokenID != created.AdminToken.ID {
+		t.Fatalf("principal token id = %s, want %s", principal.AdminTokenID, created.AdminToken.ID)
+	}
+}
+
 func TestAdminTokenServiceRejectsRevokedToken(t *testing.T) {
 	ctx := context.Background()
 	st := openAuthTestStore(t, ctx)

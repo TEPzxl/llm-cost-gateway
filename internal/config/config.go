@@ -20,6 +20,8 @@ type Config struct {
 	RedisURL                   string   `yaml:"redis_url"`
 	PlatformBootstrapToken     string   `yaml:"platform_bootstrap_token"`
 	TokenHashSecret            string   `yaml:"token_hash_secret"`
+	TokenHashSecretVersion     int      `yaml:"token_hash_secret_version"`
+	TokenHashSecretKeyring     string   `yaml:"token_hash_secret_keyring"`
 	SecretEncryptionKey        string   `yaml:"secret_encryption_key"`
 	SecretEncryptionKeyVersion int      `yaml:"secret_encryption_key_version"`
 	SecretEncryptionKeyring    string   `yaml:"secret_encryption_keyring"`
@@ -85,6 +87,12 @@ func (c Config) Validate() error {
 	}
 	if c.TokenHashSecret == "" {
 		return errors.New("TOKEN_HASH_SECRET is required")
+	}
+	if c.TokenHashSecretVersion <= 0 {
+		return fmt.Errorf("TOKEN_HASH_SECRET_VERSION must be greater than 0")
+	}
+	if _, err := c.TokenHashSecrets(); err != nil {
+		return err
 	}
 	if c.SecretEncryptionKey == "" {
 		return errors.New("SECRET_ENCRYPTION_KEY is required")
@@ -184,6 +192,7 @@ func defaultConfig() Config {
 		ServerPort:                 8080,
 		DatabaseURL:                "postgres://llmgw:llmgw@localhost:5432/llmgw?sslmode=disable",
 		RedisURL:                   "redis://localhost:6379/0",
+		TokenHashSecretVersion:     1,
 		SecretEncryptionKeyVersion: 1,
 		LogLevel:                   "info",
 		MaxRetries:                 1,
@@ -229,6 +238,14 @@ func applyEnv(cfg *Config) error {
 	setStringFromEnv("REDIS_URL", &cfg.RedisURL)
 	setStringFromEnv("PLATFORM_BOOTSTRAP_TOKEN", &cfg.PlatformBootstrapToken)
 	setStringFromEnv("TOKEN_HASH_SECRET", &cfg.TokenHashSecret)
+	if value := os.Getenv("TOKEN_HASH_SECRET_VERSION"); value != "" {
+		version, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("parse TOKEN_HASH_SECRET_VERSION: %w", err)
+		}
+		cfg.TokenHashSecretVersion = version
+	}
+	setStringFromEnv("TOKEN_HASH_SECRET_KEYRING", &cfg.TokenHashSecretKeyring)
 	setStringFromEnv("SECRET_ENCRYPTION_KEY", &cfg.SecretEncryptionKey)
 	if value := os.Getenv("SECRET_ENCRYPTION_KEY_VERSION"); value != "" {
 		version, err := strconv.Atoi(value)
@@ -414,6 +431,40 @@ func (c Config) SecretEncryptionKeys() (map[int32]string, error) {
 		return nil, fmt.Errorf("SECRET_ENCRYPTION_KEY_VERSION must exist in SECRET_ENCRYPTION_KEYRING")
 	}
 	return keys, nil
+}
+
+func (c Config) TokenHashSecrets() (map[int32]string, error) {
+	version := c.TokenHashSecretVersion
+	if version <= 0 {
+		version = 1
+	}
+	if strings.TrimSpace(c.TokenHashSecretKeyring) == "" {
+		return map[int32]string{int32(version): c.TokenHashSecret}, nil
+	}
+	entries := splitCSV(c.TokenHashSecretKeyring)
+	secrets := make(map[int32]string, len(entries))
+	for _, entry := range entries {
+		versionText, secret, ok := strings.Cut(entry, ":")
+		if !ok {
+			return nil, fmt.Errorf("TOKEN_HASH_SECRET_KEYRING entries must use version:secret format")
+		}
+		parsedVersion, err := strconv.Atoi(strings.TrimSpace(versionText))
+		if err != nil {
+			return nil, fmt.Errorf("parse TOKEN_HASH_SECRET_KEYRING version: %w", err)
+		}
+		if parsedVersion <= 0 {
+			return nil, fmt.Errorf("TOKEN_HASH_SECRET_KEYRING version must be greater than 0")
+		}
+		trimmedSecret := strings.TrimSpace(secret)
+		if trimmedSecret == "" {
+			return nil, fmt.Errorf("TOKEN_HASH_SECRET_KEYRING secret version %d is empty", parsedVersion)
+		}
+		secrets[int32(parsedVersion)] = trimmedSecret
+	}
+	if _, ok := secrets[int32(version)]; !ok {
+		return nil, fmt.Errorf("TOKEN_HASH_SECRET_VERSION must exist in TOKEN_HASH_SECRET_KEYRING")
+	}
+	return secrets, nil
 }
 
 func validAppEnv(value string) bool {
