@@ -28,6 +28,11 @@ var (
 type AdminTokenPrincipal struct {
 	OrgID        uuid.UUID
 	AdminTokenID uuid.UUID
+	ActorType    string
+	Role         string
+	UserID       *uuid.UUID
+	MembershipID *uuid.UUID
+	SessionID    *uuid.UUID
 	Scopes       []string
 }
 
@@ -139,6 +144,8 @@ func (s *AdminTokenService) Authenticate(ctx context.Context, token string) (Adm
 	return AdminTokenPrincipal{
 		OrgID:        adminToken.OrgID,
 		AdminTokenID: adminToken.ID,
+		ActorType:    ActorServiceToken,
+		Role:         RoleOwner,
 		Scopes:       adminToken.Scopes,
 	}, nil
 }

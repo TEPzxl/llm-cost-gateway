@@ -101,7 +101,7 @@ func TestAdminAuditLogsRouteListsAuditLogs(t *testing.T) {
 	}
 	var response struct {
 		Items []struct {
-			ActorAdminTokenID uuid.UUID  `json:"actor_admin_token_id"`
+			ActorAdminTokenID *uuid.UUID `json:"actor_admin_token_id"`
 			Action            string     `json:"action"`
 			ResourceType      string     `json:"resource_type"`
 			ResourceID        *uuid.UUID `json:"resource_id"`
@@ -115,7 +115,7 @@ func TestAdminAuditLogsRouteListsAuditLogs(t *testing.T) {
 		t.Fatalf("audit log count = %d, want 1", len(response.Items))
 	}
 	item := response.Items[0]
-	if item.ActorAdminTokenID != adminToken.ID || item.Action != "create_provider" || item.ResourceType != "provider" {
+	if item.ActorAdminTokenID == nil || *item.ActorAdminTokenID != adminToken.ID || item.Action != "create_provider" || item.ResourceType != "provider" {
 		t.Fatalf("audit log item = %+v, want create_provider by %s", item, adminToken.ID)
 	}
 	if item.ResourceID == nil || *item.ResourceID != provider.ID {

@@ -3,13 +3,14 @@ INSERT INTO admin_audit_logs (
   id,
   org_id,
   actor_admin_token_id,
+  actor_user_id,
   action,
   resource_type,
   resource_id,
   request_id,
   created_at
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8
+  $1, $2, $3, $4, $5, $6, $7, $8, $9
 ) RETURNING *;
 
 -- name: ListAdminAuditLogs :many

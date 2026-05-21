@@ -17,20 +17,22 @@ INSERT INTO admin_audit_logs (
   id,
   org_id,
   actor_admin_token_id,
+  actor_user_id,
   action,
   resource_type,
   resource_id,
   request_id,
   created_at
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8
-) RETURNING id, org_id, actor_admin_token_id, action, resource_type, resource_id, request_id, created_at
+  $1, $2, $3, $4, $5, $6, $7, $8, $9
+) RETURNING id, org_id, actor_admin_token_id, action, resource_type, resource_id, request_id, created_at, actor_user_id
 `
 
 type InsertAdminAuditLogParams struct {
 	ID                uuid.UUID  `db:"id" json:"id"`
 	OrgID             uuid.UUID  `db:"org_id" json:"org_id"`
-	ActorAdminTokenID uuid.UUID  `db:"actor_admin_token_id" json:"actor_admin_token_id"`
+	ActorAdminTokenID *uuid.UUID `db:"actor_admin_token_id" json:"actor_admin_token_id"`
+	ActorUserID       *uuid.UUID `db:"actor_user_id" json:"actor_user_id"`
 	Action            string     `db:"action" json:"action"`
 	ResourceType      string     `db:"resource_type" json:"resource_type"`
 	ResourceID        *uuid.UUID `db:"resource_id" json:"resource_id"`
@@ -43,6 +45,7 @@ func (q *Queries) InsertAdminAuditLog(ctx context.Context, arg InsertAdminAuditL
 		arg.ID,
 		arg.OrgID,
 		arg.ActorAdminTokenID,
+		arg.ActorUserID,
 		arg.Action,
 		arg.ResourceType,
 		arg.ResourceID,
@@ -59,12 +62,13 @@ func (q *Queries) InsertAdminAuditLog(ctx context.Context, arg InsertAdminAuditL
 		&i.ResourceID,
 		&i.RequestID,
 		&i.CreatedAt,
+		&i.ActorUserID,
 	)
 	return i, err
 }
 
 const listAdminAuditLogs = `-- name: ListAdminAuditLogs :many
-SELECT id, org_id, actor_admin_token_id, action, resource_type, resource_id, request_id, created_at
+SELECT id, org_id, actor_admin_token_id, action, resource_type, resource_id, request_id, created_at, actor_user_id
 FROM admin_audit_logs
 WHERE org_id = $1
 ORDER BY created_at DESC, id DESC
@@ -95,6 +99,7 @@ func (q *Queries) ListAdminAuditLogs(ctx context.Context, arg ListAdminAuditLogs
 			&i.ResourceID,
 			&i.RequestID,
 			&i.CreatedAt,
+			&i.ActorUserID,
 		); err != nil {
 			return nil, err
 		}

@@ -43,9 +43,10 @@ func AdminAudit(service *audit.AdminAuditService) gin.HandlerFunc {
 			action = defaultAuditAction(c.Request.Method, resourceType)
 		}
 		resourceID := auditUUIDPtr(c, adminAuditResourceIDKey)
+		adminTokenID := principal.AdminTokenID
 		_, _ = service.Record(c.Request.Context(), audit.RecordInput{
 			OrgID:             principal.OrgID,
-			ActorAdminTokenID: principal.AdminTokenID,
+			ActorAdminTokenID: &adminTokenID,
 			Action:            action,
 			ResourceType:      resourceType,
 			ResourceID:        resourceID,

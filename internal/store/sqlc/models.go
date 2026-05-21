@@ -15,12 +15,13 @@ import (
 type AdminAuditLog struct {
 	ID                uuid.UUID  `db:"id" json:"id"`
 	OrgID             uuid.UUID  `db:"org_id" json:"org_id"`
-	ActorAdminTokenID uuid.UUID  `db:"actor_admin_token_id" json:"actor_admin_token_id"`
+	ActorAdminTokenID *uuid.UUID `db:"actor_admin_token_id" json:"actor_admin_token_id"`
 	Action            string     `db:"action" json:"action"`
 	ResourceType      string     `db:"resource_type" json:"resource_type"`
 	ResourceID        *uuid.UUID `db:"resource_id" json:"resource_id"`
 	RequestID         string     `db:"request_id" json:"request_id"`
 	CreatedAt         time.Time  `db:"created_at" json:"created_at"`
+	ActorUserID       *uuid.UUID `db:"actor_user_id" json:"actor_user_id"`
 }
 
 type AdminToken struct {
@@ -163,6 +164,16 @@ type ModelPricingVersion struct {
 	CreatedAt                      time.Time  `db:"created_at" json:"created_at"`
 }
 
+type OrgMembership struct {
+	ID        uuid.UUID `db:"id" json:"id"`
+	OrgID     uuid.UUID `db:"org_id" json:"org_id"`
+	UserID    uuid.UUID `db:"user_id" json:"user_id"`
+	Role      string    `db:"role" json:"role"`
+	Status    string    `db:"status" json:"status"`
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
+}
+
 type Organization struct {
 	ID        uuid.UUID `db:"id" json:"id"`
 	Name      string    `db:"name" json:"name"`
@@ -256,4 +267,26 @@ type UsageRecord struct {
 	TotalTokens       int32            `db:"total_tokens" json:"total_tokens"`
 	ProviderUsageJson *json.RawMessage `db:"provider_usage_json" json:"provider_usage_json"`
 	CreatedAt         time.Time        `db:"created_at" json:"created_at"`
+}
+
+type User struct {
+	ID          uuid.UUID `db:"id" json:"id"`
+	Email       string    `db:"email" json:"email"`
+	DisplayName string    `db:"display_name" json:"display_name"`
+	Status      string    `db:"status" json:"status"`
+	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
+}
+
+type UserSession struct {
+	ID          uuid.UUID  `db:"id" json:"id"`
+	OrgID       uuid.UUID  `db:"org_id" json:"org_id"`
+	UserID      uuid.UUID  `db:"user_id" json:"user_id"`
+	TokenPrefix string     `db:"token_prefix" json:"token_prefix"`
+	TokenHash   string     `db:"token_hash" json:"token_hash"`
+	Status      string     `db:"status" json:"status"`
+	ExpiresAt   time.Time  `db:"expires_at" json:"expires_at"`
+	LastUsedAt  *time.Time `db:"last_used_at" json:"last_used_at"`
+	CreatedAt   time.Time  `db:"created_at" json:"created_at"`
+	RevokedAt   *time.Time `db:"revoked_at" json:"revoked_at"`
 }

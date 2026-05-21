@@ -22,7 +22,8 @@ func NewAuditHandler(service *audit.AdminAuditService) *AuditHandler {
 
 type auditLogResponse struct {
 	ID                uuid.UUID  `json:"id"`
-	ActorAdminTokenID uuid.UUID  `json:"actor_admin_token_id"`
+	ActorAdminTokenID *uuid.UUID `json:"actor_admin_token_id"`
+	ActorUserID       *uuid.UUID `json:"actor_user_id"`
 	Action            string     `json:"action"`
 	ResourceType      string     `json:"resource_type"`
 	ResourceID        *uuid.UUID `json:"resource_id"`
@@ -65,6 +66,7 @@ func newAuditLogResponse(item db.AdminAuditLog) auditLogResponse {
 	return auditLogResponse{
 		ID:                item.ID,
 		ActorAdminTokenID: item.ActorAdminTokenID,
+		ActorUserID:       item.ActorUserID,
 		Action:            item.Action,
 		ResourceType:      item.ResourceType,
 		ResourceID:        item.ResourceID,

@@ -14,6 +14,7 @@ sql:
       - db/migrations/000010_cache_events.up.sql
       - db/migrations/000011_semantic_cache_events.up.sql
       - db/migrations/000012_content_policies.up.sql
+      - db/migrations/000013_rbac.up.sql
     queries: db/query
     gen:
       go:

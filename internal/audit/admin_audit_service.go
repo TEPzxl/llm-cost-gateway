@@ -37,7 +37,8 @@ func NewAdminAuditService(queries *db.Queries, opts ...AdminAuditOption) *AdminA
 
 type RecordInput struct {
 	OrgID             uuid.UUID
-	ActorAdminTokenID uuid.UUID
+	ActorAdminTokenID *uuid.UUID
+	ActorUserID       *uuid.UUID
 	Action            string
 	ResourceType      string
 	ResourceID        *uuid.UUID
@@ -48,8 +49,12 @@ func (s *AdminAuditService) Record(ctx context.Context, input RecordInput) (db.A
 	if input.OrgID == uuid.Nil {
 		return db.AdminAuditLog{}, fmt.Errorf("org_id is required")
 	}
-	if input.ActorAdminTokenID == uuid.Nil {
-		return db.AdminAuditLog{}, fmt.Errorf("actor_admin_token_id is required")
+	if (input.ActorAdminTokenID == nil || *input.ActorAdminTokenID == uuid.Nil) &&
+		(input.ActorUserID == nil || *input.ActorUserID == uuid.Nil) {
+		return db.AdminAuditLog{}, fmt.Errorf("actor is required")
+	}
+	if input.ActorAdminTokenID != nil && input.ActorUserID != nil {
+		return db.AdminAuditLog{}, fmt.Errorf("only one actor is allowed")
 	}
 	if input.Action == "" {
 		return db.AdminAuditLog{}, fmt.Errorf("action is required")
@@ -64,6 +69,7 @@ func (s *AdminAuditService) Record(ctx context.Context, input RecordInput) (db.A
 		ID:                uuid.New(),
 		OrgID:             input.OrgID,
 		ActorAdminTokenID: input.ActorAdminTokenID,
+		ActorUserID:       input.ActorUserID,
 		Action:            input.Action,
 		ResourceType:      input.ResourceType,
 		ResourceID:        input.ResourceID,

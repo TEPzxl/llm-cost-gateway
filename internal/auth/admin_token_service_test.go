@@ -55,6 +55,9 @@ func TestAdminTokenServiceCreatesAndAuthenticatesToken(t *testing.T) {
 	if principal.AdminTokenID != created.AdminToken.ID {
 		t.Fatalf("principal token id = %s, want %s", principal.AdminTokenID, created.AdminToken.ID)
 	}
+	if principal.ActorType != ActorServiceToken || principal.Role != RoleOwner {
+		t.Fatalf("principal actor = %s/%s, want %s/%s", principal.ActorType, principal.Role, ActorServiceToken, RoleOwner)
+	}
 }
 
 func TestAdminTokenServiceRejectsRevokedToken(t *testing.T) {
@@ -99,6 +102,9 @@ func resetAuthTestDatabase(t *testing.T, ctx context.Context, st *store.Store) {
 
 	_, err := st.Pool.Exec(ctx, `
 		TRUNCATE
+			user_sessions,
+			org_memberships,
+			users,
 			cost_records,
 			usage_records,
 			request_logs,
