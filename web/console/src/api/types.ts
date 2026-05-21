@@ -80,15 +80,22 @@ export type RoutePolicy = {
   id: ID;
   name: string;
   match_model: string;
-  strategy: "single" | "fallback" | string;
+  strategy: "single" | "fallback" | "lowest_cost" | string;
+  config?: RoutePolicyConfig;
   status: string;
   created_at: string;
+};
+
+export type RoutePolicyConfig = {
+  max_estimated_cost_micro_usd?: number;
+  fallback_to_priority?: boolean;
 };
 
 export type CreateRoutePolicyRequest = {
   name: string;
   match_model: string;
-  strategy: "single" | "fallback";
+  strategy: "single" | "fallback" | "lowest_cost";
+  config?: RoutePolicyConfig;
   targets: Array<{
     provider_id: ID;
     model_id: ID;
