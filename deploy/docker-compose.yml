@@ -47,8 +47,8 @@ services:
     profiles: ["analytics"]
     environment:
       CLICKHOUSE_DB: llmgw
-      CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_USER: llmgw
+      CLICKHOUSE_PASSWORD: llmgw
     ports:
       - "8123:8123"
       - "9000:9000"
@@ -84,8 +84,8 @@ services:
       CLICKHOUSE_ENABLED: "false"
       CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_DATABASE: llmgw
-      CLICKHOUSE_USERNAME: default
-      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_USERNAME: llmgw
+      CLICKHOUSE_PASSWORD: llmgw
     ports:
       - "8080:8080"
     depends_on:

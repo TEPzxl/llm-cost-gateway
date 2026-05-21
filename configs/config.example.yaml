@@ -14,5 +14,5 @@ kafka_usage_topic: llm-usage-events
 clickhouse_enabled: false
 clickhouse_url: http://localhost:8123
 clickhouse_database: llmgw
-clickhouse_username: default
-clickhouse_password: ""
+clickhouse_username: llmgw
+clickhouse_password: llmgw
