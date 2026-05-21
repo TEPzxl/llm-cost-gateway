@@ -13,6 +13,8 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/metering"
 	contract "github.com/tep/llm-cost-gateway/internal/provider/contract"
 	"github.com/tep/llm-cost-gateway/internal/routing"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ChatStreamResult struct {
@@ -30,10 +32,21 @@ type ChatStreamResult struct {
 
 func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStreamResult, error) {
 	startedAt := s.clock()
+	ctx, span := s.tracer.Start(ctx, "gateway.stream_chat", trace.WithAttributes(
+		attribute.String("request_id", input.RequestID.String()),
+		attribute.String("org_id", input.Principal.OrgID.String()),
+	))
+	spanStatus := "error"
+	defer func() {
+		span.SetAttributes(attribute.String("status", spanStatus))
+		span.End()
+	}()
 	var request ChatCompletionRequest
 	if err := json.Unmarshal(input.RawBody, &request); err != nil {
+		recordTracingError(span, domain.CodeInvalidRequest, err)
 		return nil, domain.NewError(http.StatusBadRequest, domain.CodeInvalidRequest, "invalid JSON body")
 	}
+	span.SetAttributes(attribute.String("requested_model", request.Model))
 	if request.Model == "" || len(request.Messages) == 0 {
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusBadRequest, domain.CodeInvalidRequest, "", nil, nil, nil, startedAt)
 		s.metrics.ObserveGatewayRequest("error", "", request.Model, s.clock().Sub(startedAt))
@@ -52,10 +65,14 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 	}
 	s.recordPromptCacheSkip(ctx, input, request, "stream")
 
-	budgetCheck, err := s.budgets.Check(ctx, input.Principal.OrgID)
+	budgetCtx, budgetSpan := s.tracer.Start(ctx, "gateway.budget_check", trace.WithAttributes(attribute.String("org_id", input.Principal.OrgID.String())))
+	budgetCheck, err := s.budgets.Check(budgetCtx, input.Principal.OrgID)
 	if err != nil {
+		endTracingSpan(budgetSpan, "error", domain.CodeInternalError, err)
+		recordTracingError(span, domain.CodeInternalError, err)
 		return nil, err
 	}
+	endTracingSpan(budgetSpan, "success", "", nil)
 	if !budgetCheck.Allowed {
 		metadata := withContentPolicyMetadata(budgetMetadata(budgetCheck), contentDecision)
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusBudgetBlocked, http.StatusPaymentRequired, domain.CodeBudgetExceeded, "", nil, nil, metadata, startedAt)
@@ -63,10 +80,17 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 		s.metrics.ObserveGatewayRequest("budget_blocked", "", request.Model, s.clock().Sub(startedAt))
 		return nil, domain.NewError(http.StatusPaymentRequired, domain.CodeBudgetExceeded, "budget exceeded")
 	}
-	quotaCheck, err := s.apiKeyQuotas.Check(ctx, input.Principal)
+	quotaCtx, quotaSpan := s.tracer.Start(ctx, "gateway.api_key_quota_check", trace.WithAttributes(
+		attribute.String("org_id", input.Principal.OrgID.String()),
+		attribute.String("api_key_id", input.Principal.APIKeyID.String()),
+	))
+	quotaCheck, err := s.apiKeyQuotas.Check(quotaCtx, input.Principal)
 	if err != nil {
+		endTracingSpan(quotaSpan, "error", domain.CodeInternalError, err)
+		recordTracingError(span, domain.CodeInternalError, err)
 		return nil, err
 	}
+	endTracingSpan(quotaSpan, "success", "", nil)
 	if !quotaCheck.Allowed {
 		metadata := withContentPolicyMetadata(apiKeyQuotaMetadata(quotaCheck), contentDecision)
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusBudgetBlocked, http.StatusPaymentRequired, domain.CodeAPIKeyQuotaExceeded, "", nil, nil, metadata, startedAt)
@@ -74,12 +98,21 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 		return nil, domain.NewError(http.StatusPaymentRequired, domain.CodeAPIKeyQuotaExceeded, "api key quota exceeded")
 	}
 
-	resolved, err := s.resolver.Resolve(ctx, routing.ResolveParams{
+	routingCtx, routingSpan := s.tracer.Start(ctx, "gateway.routing", trace.WithAttributes(
+		attribute.String("org_id", input.Principal.OrgID.String()),
+		attribute.String("requested_model", request.Model),
+	))
+	resolved, err := s.resolver.Resolve(routingCtx, routing.ResolveParams{
 		OrgID:                 input.Principal.OrgID,
 		RequestedModel:        request.Model,
 		EstimatedPromptTokens: estimatePromptTokens(request.Messages),
 		EstimatedMaxTokens:    estimateMaxTokens(request.MaxTokens),
 	})
+	if err != nil {
+		endTracingSpan(routingSpan, "error", domain.CodeRouteNotFound, err)
+	} else {
+		endTracingSpan(routingSpan, "success", "", nil)
+	}
 	if err != nil {
 		if errors.Is(err, routing.ErrRouteNotFound) {
 			_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusNotFound, domain.CodeRouteNotFound, "", nil, nil, contentPolicyMetadata(contentDecision), startedAt)
@@ -89,15 +122,23 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 		return nil, err
 	}
 
+	attemptCtx, attemptSpan := s.tracer.Start(ctx, "gateway.provider_attempt", trace.WithAttributes(
+		attribute.String("provider", resolved.Provider.Name),
+		attribute.String("provider_id", resolved.Provider.ID.String()),
+		attribute.String("model_id", resolved.Model.ID.String()),
+		attribute.String("requested_model", request.Model),
+	))
 	adapter, err := s.registry.AdapterFor(resolved.Provider.Type)
 	if err != nil {
+		endTracingSpan(attemptSpan, "error", domain.CodeProviderUnavailable, err)
 		metadata := withContentPolicyMetadata(streamMetadata(budgetCheck, quotaCheck, false), contentDecision)
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "", &resolved.Provider.ID, &resolved.Model.ID, metadata, startedAt)
 		s.metrics.ObserveGatewayRequest("error", resolved.Provider.Name, request.Model, s.clock().Sub(startedAt))
 		return nil, domain.NewError(http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "provider unavailable")
 	}
-	providerConfig, err := s.providerConfig(ctx, resolved.Provider)
+	providerConfig, err := s.providerConfig(attemptCtx, resolved.Provider)
 	if err != nil {
+		endTracingSpan(attemptSpan, "error", domain.CodeProviderUnavailable, err)
 		metadata := withContentPolicyMetadata(streamMetadata(budgetCheck, quotaCheck, false), contentDecision)
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "", &resolved.Provider.ID, &resolved.Model.ID, metadata, startedAt)
 		s.metrics.ObserveGatewayRequest("error", resolved.Provider.Name, request.Model, s.clock().Sub(startedAt))
@@ -105,7 +146,7 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 	}
 
 	providerStartedAt := s.clock()
-	stream, err := adapter.StreamChat(ctx, contract.ChatRequest{
+	stream, err := adapter.StreamChat(attemptCtx, contract.ChatRequest{
 		RequestID:   input.RequestID.String(),
 		OrgID:       input.Principal.OrgID,
 		Provider:    providerConfig,
@@ -117,13 +158,16 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 	})
 	if err != nil {
 		status, code := providerErrorStatus(err)
+		endTracingSpan(attemptSpan, "error", code, err)
 		metadata := withContentPolicyMetadata(streamMetadata(budgetCheck, quotaCheck, false), contentDecision)
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, status, code, "", &resolved.Provider.ID, &resolved.Model.ID, metadata, startedAt)
 		s.metrics.ObserveProviderRequest(resolved.Provider.Name, request.Model, "error", code)
 		s.metrics.ObserveGatewayRequest("error", resolved.Provider.Name, request.Model, s.clock().Sub(startedAt))
 		return nil, domain.NewError(status, code, "provider request failed")
 	}
+	endTracingSpan(attemptSpan, "success", "", nil)
 
+	spanStatus = "success"
 	return &ChatStreamResult{
 		Stream:            stream,
 		input:             input,

@@ -13,6 +13,11 @@ import (
 
 	"github.com/tep/llm-cost-gateway/internal/domain"
 	contract "github.com/tep/llm-cost-gateway/internal/provider/contract"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Adapter struct {
@@ -40,14 +45,33 @@ func WithHTTPClient(client *http.Client) Option {
 }
 
 func (a *Adapter) Chat(ctx context.Context, req contract.ChatRequest) (*contract.ChatResponse, error) {
+	ctx, span := otel.Tracer("github.com/tep/llm-cost-gateway/internal/provider/openai_compatible").Start(ctx, "provider.openai.chat", trace.WithAttributes(
+		attribute.String("request_id", req.RequestID),
+		attribute.String("org_id", req.OrgID.String()),
+		attribute.String("provider", req.Provider.Name),
+		attribute.String("provider_id", req.Provider.ID.String()),
+		attribute.String("model", req.Model.ProviderModelName),
+		attribute.String("model_id", req.Model.ID.String()),
+	))
+	spanStatus := "error"
+	defer func() {
+		span.SetAttributes(attribute.String("status", spanStatus))
+		span.End()
+	}()
 	if req.Stream {
-		return nil, contract.NewError(domain.CodeStreamNotSupported, "stream is not supported in v0.1", nil)
+		err := contract.NewError(domain.CodeStreamNotSupported, "stream is not supported in v0.1", nil)
+		recordProviderSpanError(span, domain.CodeStreamNotSupported, err)
+		return nil, err
 	}
 	if strings.TrimSpace(req.Provider.BaseURL) == "" {
-		return nil, contract.NewError(domain.CodeProviderError, "provider base_url is required", nil)
+		err := contract.NewError(domain.CodeProviderError, "provider base_url is required", nil)
+		recordProviderSpanError(span, domain.CodeProviderError, err)
+		return nil, err
 	}
 	if strings.TrimSpace(req.Provider.APIKey) == "" {
-		return nil, contract.NewError(domain.CodeProviderError, "provider api key is required", nil)
+		err := contract.NewError(domain.CodeProviderError, "provider api key is required", nil)
+		recordProviderSpanError(span, domain.CodeProviderError, err)
+		return nil, err
 	}
 
 	timeoutMS := req.Provider.TimeoutMS
@@ -60,45 +84,63 @@ func (a *Adapter) Chat(ctx context.Context, req contract.ChatRequest) (*contract
 	startedAt := time.Now()
 	body, err := json.Marshal(newUpstreamRequest(req))
 	if err != nil {
-		return nil, contract.NewError(domain.CodeProviderError, "encode upstream request", err)
+		providerErr := contract.NewError(domain.CodeProviderError, "encode upstream request", err)
+		recordProviderSpanError(span, domain.CodeProviderError, providerErr)
+		return nil, providerErr
 	}
 
 	httpReq, err := http.NewRequestWithContext(callCtx, http.MethodPost, upstreamChatCompletionsURL(req.Provider.BaseURL), bytes.NewReader(body))
 	if err != nil {
-		return nil, contract.NewError(domain.CodeProviderError, "build upstream request", err)
+		providerErr := contract.NewError(domain.CodeProviderError, "build upstream request", err)
+		recordProviderSpanError(span, domain.CodeProviderError, providerErr)
+		return nil, providerErr
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+req.Provider.APIKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
+	otel.GetTextMapPropagator().Inject(callCtx, propagation.HeaderCarrier(httpReq.Header))
 
 	httpResp, err := a.client.Do(httpReq)
 	if err != nil {
 		if isTimeoutError(callCtx, err) {
-			return nil, contract.NewError(domain.CodeProviderTimeout, "provider request timed out", err)
+			providerErr := contract.NewError(domain.CodeProviderTimeout, "provider request timed out", err)
+			recordProviderSpanError(span, domain.CodeProviderTimeout, providerErr)
+			return nil, providerErr
 		}
-		return nil, contract.NewError(domain.CodeProviderUnavailable, "provider request failed", err)
+		providerErr := contract.NewError(domain.CodeProviderUnavailable, "provider request failed", err)
+		recordProviderSpanError(span, domain.CodeProviderUnavailable, providerErr)
+		return nil, providerErr
 	}
 	defer httpResp.Body.Close()
 
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		return nil, upstreamStatusError(httpResp.StatusCode)
+		providerErr := upstreamStatusError(httpResp.StatusCode)
+		recordProviderSpanError(span, contract.ErrorCode(providerErr), providerErr)
+		return nil, providerErr
 	}
 
 	var upstream upstreamResponse
 	if err := json.NewDecoder(httpResp.Body).Decode(&upstream); err != nil {
-		return nil, contract.NewError(domain.CodeProviderError, "decode upstream response", err)
+		providerErr := contract.NewError(domain.CodeProviderError, "decode upstream response", err)
+		recordProviderSpanError(span, domain.CodeProviderError, providerErr)
+		return nil, providerErr
 	}
 	if upstream.Usage == nil ||
 		upstream.Usage.PromptTokens == nil ||
 		upstream.Usage.CompletionTokens == nil ||
 		upstream.Usage.TotalTokens == nil {
-		return nil, contract.NewError(domain.CodeUsageMissing, "provider response missing usage", nil)
+		err := contract.NewError(domain.CodeUsageMissing, "provider response missing usage", nil)
+		recordProviderSpanError(span, domain.CodeUsageMissing, err)
+		return nil, err
 	}
 	if len(upstream.Choices) == 0 {
-		return nil, contract.NewError(domain.CodeProviderError, "provider response missing choices", nil)
+		err := contract.NewError(domain.CodeProviderError, "provider response missing choices", nil)
+		recordProviderSpanError(span, domain.CodeProviderError, err)
+		return nil, err
 	}
 
 	choice := upstream.Choices[0]
+	spanStatus = "success"
 	return &contract.ChatResponse{
 		ProviderResponseID: upstream.ID,
 		Content:            choice.Message.Content,
@@ -116,6 +158,16 @@ func (a *Adapter) Chat(ctx context.Context, req contract.ChatRequest) (*contract
 			"total_tokens":      *upstream.Usage.TotalTokens,
 		},
 	}, nil
+}
+
+func recordProviderSpanError(span trace.Span, errorCode string, err error) {
+	if errorCode != "" {
+		span.SetAttributes(attribute.String("error_code", errorCode))
+	}
+	if err != nil {
+		span.RecordError(err)
+	}
+	span.SetStatus(codes.Error, errorCode)
 }
 
 type upstreamRequest struct {

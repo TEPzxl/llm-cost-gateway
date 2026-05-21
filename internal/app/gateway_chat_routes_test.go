@@ -20,6 +20,10 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/ratelimit"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	"github.com/tep/llm-cost-gateway/internal/testutil"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/zap"
 )
 
@@ -931,6 +935,64 @@ func TestGatewayChatCompletionsStreamPIIBlockSkipsProvider(t *testing.T) {
 	assertAppRequestLogMetadataOmits(t, ctx, st, "415-555-1212")
 }
 
+func TestGatewayChatCompletionsRecordsTracingSpansWithoutSensitiveAttributes(t *testing.T) {
+	oldProvider := otel.GetTracerProvider()
+	oldPropagator := otel.GetTextMapPropagator()
+	recorder := tracetest.NewSpanRecorder()
+	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	otel.SetTracerProvider(tracerProvider)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+	t.Cleanup(func() {
+		otel.SetTracerProvider(oldProvider)
+		otel.SetTextMapPropagator(oldPropagator)
+		_ = tracerProvider.Shutdown(context.Background())
+	})
+
+	router, _, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Traceparent") == "" {
+			t.Fatal("provider request missing traceparent header")
+		}
+		writeAppOpenAIChatResponse(t, w)
+	}))
+	defer server.Close()
+
+	provider, model := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "trace-chat", server.URL, 100)
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "trace-chat-policy",
+		MatchModel: "trace-chat",
+		Strategy:   "single",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: provider.ID, ModelID: model.ID, Priority: 1, Weight: 100},
+		},
+	})
+
+	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"trace-chat","messages":[{"role":"user","content":"trace me without leaking"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("trace chat status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	spans := recorder.Ended()
+	for _, name := range []string{
+		"gateway.chat",
+		"gateway.budget_check",
+		"gateway.api_key_quota_check",
+		"gateway.routing",
+		"gateway.provider_attempt",
+		"provider.openai.chat",
+	} {
+		if !hasSpanNamed(spans, name) {
+			t.Fatalf("span %q not recorded; spans=%v", name, spanNames(spans))
+		}
+	}
+	if spanAttributesContain(spans, "trace me without leaking") {
+		t.Fatal("span attributes contain prompt text")
+	}
+	if spanAttributesContain(spans, "provider-secret-key") {
+		t.Fatal("span attributes contain provider api key")
+	}
+}
+
 type fakeGatewayLimiter struct {
 	decision ratelimit.Decision
 	err      error
@@ -1255,6 +1317,34 @@ func assertAppRequestLogMetadataOmits(t *testing.T, ctx context.Context, st *sto
 	if count != 0 {
 		t.Fatalf("request log metadata contains raw content %q", raw)
 	}
+}
+
+func hasSpanNamed(spans []sdktrace.ReadOnlySpan, name string) bool {
+	for _, span := range spans {
+		if span.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
+func spanNames(spans []sdktrace.ReadOnlySpan) []string {
+	names := make([]string, 0, len(spans))
+	for _, span := range spans {
+		names = append(names, span.Name())
+	}
+	return names
+}
+
+func spanAttributesContain(spans []sdktrace.ReadOnlySpan, value string) bool {
+	for _, span := range spans {
+		for _, attr := range span.Attributes() {
+			if strings.Contains(attr.Value.AsString(), value) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func assertAppCacheEventCount(t *testing.T, ctx context.Context, st *store.Store, eventType string, want int) {

@@ -31,6 +31,9 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/routing"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -55,6 +58,7 @@ type ChatService struct {
 	embedding           embedding.Adapter
 	semanticThreshold   float64
 	semanticMaxTemp     float64
+	tracer              trace.Tracer
 	logger              *zap.Logger
 }
 
@@ -96,6 +100,14 @@ func WithSemanticCache(cache *promptcache.SemanticCache, adapter embedding.Adapt
 		s.embedding = adapter
 		s.semanticThreshold = threshold
 		s.semanticMaxTemp = maxTemperature
+	}
+}
+
+func WithTracer(tracer trace.Tracer) ChatServiceOption {
+	return func(s *ChatService) {
+		if tracer != nil {
+			s.tracer = tracer
+		}
 	}
 }
 
@@ -207,6 +219,7 @@ func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observ
 		usageAnalytics:      analytics.DisabledSink{},
 		semanticThreshold:   0.92,
 		semanticMaxTemp:     0.3,
+		tracer:              otel.Tracer("github.com/tep/llm-cost-gateway/internal/gateway"),
 		logger:              zap.NewNop(),
 	}
 	for _, opt := range opts {
@@ -225,10 +238,21 @@ func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observ
 
 func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, error) {
 	startedAt := s.clock()
+	ctx, span := s.tracer.Start(ctx, "gateway.chat", trace.WithAttributes(
+		attribute.String("request_id", input.RequestID.String()),
+		attribute.String("org_id", input.Principal.OrgID.String()),
+	))
+	spanStatus := "error"
+	defer func() {
+		span.SetAttributes(attribute.String("status", spanStatus))
+		span.End()
+	}()
 	var request ChatCompletionRequest
 	if err := json.Unmarshal(input.RawBody, &request); err != nil {
+		recordTracingError(span, domain.CodeInvalidRequest, err)
 		return ChatResult{}, domain.NewError(http.StatusBadRequest, domain.CodeInvalidRequest, "invalid JSON body")
 	}
+	span.SetAttributes(attribute.String("requested_model", request.Model))
 	if request.Stream {
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusBadRequest, domain.CodeStreamNotSupported, "", nil, nil, nil, startedAt)
 		s.metrics.ObserveGatewayRequest("error", "", request.Model, s.clock().Sub(startedAt))
@@ -251,10 +275,14 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 		return ChatResult{}, domain.NewError(http.StatusBadRequest, domain.CodeContentPolicyBlocked, "content policy blocked")
 	}
 
-	budgetCheck, err := s.budgets.Check(ctx, input.Principal.OrgID)
+	budgetCtx, budgetSpan := s.tracer.Start(ctx, "gateway.budget_check", trace.WithAttributes(attribute.String("org_id", input.Principal.OrgID.String())))
+	budgetCheck, err := s.budgets.Check(budgetCtx, input.Principal.OrgID)
 	if err != nil {
+		endTracingSpan(budgetSpan, "error", domain.CodeInternalError, err)
+		recordTracingError(span, domain.CodeInternalError, err)
 		return ChatResult{}, err
 	}
+	endTracingSpan(budgetSpan, "success", "", nil)
 	if !budgetCheck.Allowed {
 		metadata := withContentPolicyMetadata(budgetMetadata(budgetCheck), contentDecision)
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusBudgetBlocked, http.StatusPaymentRequired, domain.CodeBudgetExceeded, "", nil, nil, metadata, startedAt)
@@ -262,10 +290,17 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 		s.metrics.ObserveGatewayRequest("budget_blocked", "", request.Model, s.clock().Sub(startedAt))
 		return ChatResult{}, domain.NewError(http.StatusPaymentRequired, domain.CodeBudgetExceeded, "budget exceeded")
 	}
-	quotaCheck, err := s.apiKeyQuotas.Check(ctx, input.Principal)
+	quotaCtx, quotaSpan := s.tracer.Start(ctx, "gateway.api_key_quota_check", trace.WithAttributes(
+		attribute.String("org_id", input.Principal.OrgID.String()),
+		attribute.String("api_key_id", input.Principal.APIKeyID.String()),
+	))
+	quotaCheck, err := s.apiKeyQuotas.Check(quotaCtx, input.Principal)
 	if err != nil {
+		endTracingSpan(quotaSpan, "error", domain.CodeInternalError, err)
+		recordTracingError(span, domain.CodeInternalError, err)
 		return ChatResult{}, err
 	}
+	endTracingSpan(quotaSpan, "success", "", nil)
 	if !quotaCheck.Allowed {
 		metadata := withContentPolicyMetadata(apiKeyQuotaMetadata(quotaCheck), contentDecision)
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusBudgetBlocked, http.StatusPaymentRequired, domain.CodeAPIKeyQuotaExceeded, "", nil, nil, metadata, startedAt)
@@ -273,12 +308,21 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 		return ChatResult{}, domain.NewError(http.StatusPaymentRequired, domain.CodeAPIKeyQuotaExceeded, "api key quota exceeded")
 	}
 
-	resolved, err := s.resolver.ResolveTargets(ctx, routing.ResolveParams{
+	routingCtx, routingSpan := s.tracer.Start(ctx, "gateway.routing", trace.WithAttributes(
+		attribute.String("org_id", input.Principal.OrgID.String()),
+		attribute.String("requested_model", request.Model),
+	))
+	resolved, err := s.resolver.ResolveTargets(routingCtx, routing.ResolveParams{
 		OrgID:                 input.Principal.OrgID,
 		RequestedModel:        request.Model,
 		EstimatedPromptTokens: estimatePromptTokens(request.Messages),
 		EstimatedMaxTokens:    estimateMaxTokens(request.MaxTokens),
 	})
+	if err != nil {
+		endTracingSpan(routingSpan, "error", domain.CodeRouteNotFound, err)
+	} else {
+		endTracingSpan(routingSpan, "success", "", nil)
+	}
 	if err != nil {
 		if errors.Is(err, routing.ErrRouteNotFound) {
 			_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusNotFound, domain.CodeRouteNotFound, "", nil, nil, contentPolicyMetadata(contentDecision), startedAt)
@@ -292,6 +336,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	cacheKey, cacheable := s.promptCacheKey(request, input.Principal.OrgID)
 	if cacheable {
 		if cached, err := s.promptCache.Get(ctx, cacheKey); err == nil {
+			spanStatus = "success"
 			return s.respondFromPromptCache(ctx, input, request, resolved, cached, cacheKey, budgetCheck, quotaCheck, contentDecision, startedAt)
 		} else if errors.Is(err, promptcache.ErrCacheMiss) {
 			s.recordCacheEvent(ctx, cacheEventInput{
@@ -319,6 +364,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 			Embedding:      semanticCandidate.embedding,
 			Threshold:      s.semanticThreshold,
 		}); err == nil {
+			spanStatus = "success"
 			return s.respondFromSemanticCache(ctx, input, request, resolved, match, budgetCheck, quotaCheck, contentDecision, startedAt)
 		} else if errors.Is(err, promptcache.ErrSemanticCacheMiss) {
 			s.recordSemanticCacheEvent(ctx, input.Principal.OrgID, nil, "semantic_miss", request.Model, semanticCandidate.cacheKeyHash, semanticCandidate.messagesHash, "")
@@ -338,8 +384,15 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	var lastStatus int
 	for index, target := range resolved.Targets {
 		selected = target
+		attemptCtx, attemptSpan := s.tracer.Start(ctx, "gateway.provider_attempt", trace.WithAttributes(
+			attribute.String("provider", target.Provider.Name),
+			attribute.String("provider_id", target.Provider.ID.String()),
+			attribute.String("model_id", target.Model.ID.String()),
+			attribute.String("requested_model", request.Model),
+		))
 		adapter, err := s.registry.AdapterFor(target.Provider.Type)
 		if err != nil {
+			endTracingSpan(attemptSpan, "error", domain.CodeProviderUnavailable, err)
 			lastErr = err
 			lastStatus = http.StatusServiceUnavailable
 			lastCode = domain.CodeProviderUnavailable
@@ -350,8 +403,9 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 			}
 			break
 		}
-		providerConfig, err := s.providerConfig(ctx, target.Provider)
+		providerConfig, err := s.providerConfig(attemptCtx, target.Provider)
 		if err != nil {
+			endTracingSpan(attemptSpan, "error", domain.CodeProviderUnavailable, err)
 			lastErr = err
 			lastStatus = http.StatusServiceUnavailable
 			lastCode = domain.CodeProviderUnavailable
@@ -365,7 +419,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 
 		providerStarted = s.clock()
 		var attemptCount int
-		providerResponse, attemptCount, err = s.chatProviderWithRetry(ctx, adapter, contract.ChatRequest{
+		providerResponse, attemptCount, err = s.chatProviderWithRetry(attemptCtx, adapter, contract.ChatRequest{
 			RequestID:   input.RequestID.String(),
 			OrgID:       input.Principal.OrgID,
 			Provider:    providerConfig,
@@ -376,11 +430,13 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 			Stream:      false,
 		})
 		if err == nil {
+			endTracingSpan(attemptSpan, "success", "", nil)
 			attempts = appendProviderAttempt(attempts, target, "success", "", false, attemptCount)
 			break
 		}
 		lastErr = err
 		lastStatus, lastCode = providerErrorStatus(err)
+		endTracingSpan(attemptSpan, "error", lastCode, err)
 		retryable := fallbackRetryable(err)
 		attempts = appendProviderAttempt(attempts, target, "error", lastCode, retryable, attemptCount)
 		s.metrics.ObserveProviderRequest(target.Provider.Name, request.Model, "error", lastCode)
@@ -442,6 +498,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 		CompletedAt:                    s.clock(),
 	})
 	if err != nil {
+		recordTracingError(span, domain.CodeInternalError, err)
 		return ChatResult{}, err
 	}
 	if cacheable {
@@ -537,6 +594,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 		},
 		RequestID: input.RequestID,
 	}
+	spanStatus = "success"
 	return ChatResult{Response: response}, nil
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/observability"
 	"github.com/tep/llm-cost-gateway/internal/ratelimit"
 	"github.com/tep/llm-cost-gateway/internal/store"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.uber.org/zap"
 )
 
@@ -27,6 +28,7 @@ type App struct {
 	store  *store.Store
 	redis  *redis.Client
 	events io.Closer
+	traces *sdktrace.TracerProvider
 }
 
 type Config = config.Config
@@ -41,15 +43,32 @@ func New(ctx context.Context, cfg Config, logger *zap.Logger) (*App, error) {
 		st.Close()
 		return nil, fmt.Errorf("open redis: %w", err)
 	}
+	tracerProvider, err := observability.NewTracerProvider(ctx, observability.TracingConfig{
+		Enabled:     cfg.TracingEnabled,
+		Endpoint:    cfg.TracingOTLPEndpoint,
+		Insecure:    cfg.TracingInsecure,
+		ServiceName: cfg.TracingServiceName,
+	})
+	if err != nil {
+		_ = redisClient.Close()
+		st.Close()
+		return nil, fmt.Errorf("init tracing: %w", err)
+	}
 
 	publisher, publisherCloser, err := newUsageEventPublisher(cfg)
 	if err != nil {
+		if tracerProvider != nil {
+			_ = tracerProvider.Shutdown(ctx)
+		}
 		_ = redisClient.Close()
 		st.Close()
 		return nil, fmt.Errorf("init usage event publisher: %w", err)
 	}
 	usageAnalytics, analyticsCloser, err := newUsageAnalyticsService(ctx, cfg, st)
 	if err != nil {
+		if tracerProvider != nil {
+			_ = tracerProvider.Shutdown(ctx)
+		}
 		if publisherCloser != nil {
 			_ = publisherCloser.Close()
 		}
@@ -58,14 +77,14 @@ func New(ctx context.Context, cfg Config, logger *zap.Logger) (*App, error) {
 		return nil, fmt.Errorf("init usage analytics: %w", err)
 	}
 
-	return newWithDependencies(cfg, logger, st, redisClient, ratelimit.NewRedisLimiter(redisClient), publisher, publisherCloser, usageAnalytics, analyticsCloser), nil
+	return newWithDependencies(cfg, logger, st, redisClient, ratelimit.NewRedisLimiter(redisClient), publisher, publisherCloser, usageAnalytics, analyticsCloser, tracerProvider), nil
 }
 
 func NewWithStore(cfg Config, logger *zap.Logger, st *store.Store) *App {
-	return newWithDependencies(cfg, logger, st, nil, nil, events.DisabledPublisher{}, nil, analytics.NewUsageAnalyticsService(st, nil, false), nil)
+	return newWithDependencies(cfg, logger, st, nil, nil, events.DisabledPublisher{}, nil, analytics.NewUsageAnalyticsService(st, nil, false), nil, nil)
 }
 
-func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisClient *redis.Client, limiter middleware.RateLimiter, usageEventPublisher events.Publisher, usageEventCloser io.Closer, usageAnalytics *analytics.UsageAnalyticsService, analyticsCloser io.Closer) *App {
+func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisClient *redis.Client, limiter middleware.RateLimiter, usageEventPublisher events.Publisher, usageEventCloser io.Closer, usageAnalytics *analytics.UsageAnalyticsService, analyticsCloser io.Closer, tracerProvider *sdktrace.TracerProvider) *App {
 	router := NewRouter(RouterConfig{
 		AppEnv:                 cfg.AppEnv,
 		PlatformBootstrapToken: cfg.PlatformBootstrapToken,
@@ -97,6 +116,7 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 		store:  st,
 		redis:  redisClient,
 		events: multiCloser(usageEventCloser, analyticsCloser),
+		traces: tracerProvider,
 	}
 }
 
@@ -180,6 +200,9 @@ func (a *App) Shutdown(ctx context.Context) error {
 	}
 	if a.events != nil {
 		_ = a.events.Close()
+	}
+	if a.traces != nil {
+		_ = a.traces.Shutdown(ctx)
 	}
 	return err
 }
