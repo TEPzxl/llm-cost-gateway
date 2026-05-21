@@ -4,18 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/tep/llm-cost-gateway/internal/costing"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 )
 
 const (
-	StrategySingle   = "single"
-	StrategyFallback = "fallback"
+	StrategySingle     = "single"
+	StrategyFallback   = "fallback"
+	StrategyLowestCost = "lowest_cost"
 )
 
 var (
@@ -47,8 +50,10 @@ type CreateRoutePolicyParams struct {
 }
 
 type ResolveParams struct {
-	OrgID          uuid.UUID
-	RequestedModel string
+	OrgID                 uuid.UUID
+	RequestedModel        string
+	EstimatedPromptTokens int64
+	EstimatedMaxTokens    int64
 }
 
 type ResolveResult struct {
@@ -58,9 +63,10 @@ type ResolveResult struct {
 }
 
 type ResolvedTarget struct {
-	RouteTarget db.RouteTarget
-	Provider    db.Provider
-	Model       db.Model
+	RouteTarget           db.RouteTarget
+	Provider              db.Provider
+	Model                 db.Model
+	EstimatedCostMicroUSD int64
 }
 
 type ResolveTargetsResult struct {
@@ -73,7 +79,8 @@ type Service struct {
 }
 
 type Resolver struct {
-	queries *db.Queries
+	queries    *db.Queries
+	calculator *costing.Calculator
 }
 
 func NewService(st *store.Store) *Service {
@@ -81,7 +88,7 @@ func NewService(st *store.Store) *Service {
 }
 
 func NewResolver(queries *db.Queries) *Resolver {
-	return &Resolver{queries: queries}
+	return &Resolver{queries: queries, calculator: costing.NewCalculator()}
 }
 
 func (s *Service) CreateRoutePolicy(ctx context.Context, params CreateRoutePolicyParams) (db.RoutePolicy, error) {
@@ -174,7 +181,7 @@ func (r *Resolver) ResolveTargets(ctx context.Context, params ResolveParams) (Re
 		}
 		return ResolveTargetsResult{}, err
 	}
-	if policy.Strategy != StrategySingle && policy.Strategy != StrategyFallback {
+	if !validStrategy(policy.Strategy) {
 		return ResolveTargetsResult{}, ErrRouteNotFound
 	}
 
@@ -212,6 +219,9 @@ func (r *Resolver) ResolveTargets(ctx context.Context, params ResolveParams) (Re
 			return ResolveTargetsResult{}, err
 		}
 		if provider.Status != "active" || model.Status != "active" || model.ProviderID != provider.ID {
+			if policy.Strategy == StrategyLowestCost {
+				continue
+			}
 			return ResolveTargetsResult{}, ErrRouteNotFound
 		}
 		resolvedTargets = append(resolvedTargets, ResolvedTarget{
@@ -220,7 +230,113 @@ func (r *Resolver) ResolveTargets(ctx context.Context, params ResolveParams) (Re
 			Model:       model,
 		})
 	}
+	if policy.Strategy == StrategyLowestCost {
+		resolved, err := r.resolveLowestCostTargets(policy, params, resolvedTargets)
+		if err != nil {
+			return ResolveTargetsResult{}, err
+		}
+		resolvedTargets = resolved
+	}
+	if len(resolvedTargets) == 0 {
+		return ResolveTargetsResult{}, ErrRouteNotFound
+	}
 	return ResolveTargetsResult{RoutePolicy: policy, Targets: resolvedTargets}, nil
+}
+
+type PolicyConfig struct {
+	MaxEstimatedCostMicroUSD *int64 `json:"max_estimated_cost_micro_usd,omitempty"`
+	FallbackToPriority       *bool  `json:"fallback_to_priority,omitempty"`
+}
+
+func (r *Resolver) resolveLowestCostTargets(policy db.RoutePolicy, params ResolveParams, targets []ResolvedTarget) ([]ResolvedTarget, error) {
+	cfg, err := parsePolicyConfig(policy.Config)
+	if err != nil {
+		return nil, err
+	}
+	for index := range targets {
+		cost, err := r.estimatedCostMicroUSD(targets[index].Model, params)
+		if err != nil {
+			return nil, err
+		}
+		targets[index].EstimatedCostMicroUSD = cost
+	}
+	sortLowestCostTargets(targets)
+	if cfg.MaxEstimatedCostMicroUSD == nil {
+		return targets, nil
+	}
+	eligible := make([]ResolvedTarget, 0, len(targets))
+	for _, target := range targets {
+		if target.EstimatedCostMicroUSD <= *cfg.MaxEstimatedCostMicroUSD {
+			eligible = append(eligible, target)
+		}
+	}
+	if len(eligible) > 0 {
+		return eligible, nil
+	}
+	if cfg.fallbackToPriority() {
+		sort.SliceStable(targets, func(i, j int) bool {
+			if targets[i].RouteTarget.Priority != targets[j].RouteTarget.Priority {
+				return targets[i].RouteTarget.Priority < targets[j].RouteTarget.Priority
+			}
+			return targets[i].RouteTarget.ID.String() < targets[j].RouteTarget.ID.String()
+		})
+		return targets, nil
+	}
+	return nil, ErrRouteNotFound
+}
+
+func (r *Resolver) estimatedCostMicroUSD(model db.Model, params ResolveParams) (int64, error) {
+	promptTokens := params.EstimatedPromptTokens
+	if promptTokens < 0 {
+		promptTokens = 0
+	}
+	maxTokens := params.EstimatedMaxTokens
+	if maxTokens < 0 {
+		maxTokens = 0
+	}
+	calculation, err := r.calculator.Calculate(costing.CalculateInput{
+		PromptTokens:                   promptTokens,
+		CompletionTokens:               maxTokens,
+		InputPriceMicroUSDPer1KTokens:  model.InputPriceMicroUsdPer1kTokens,
+		OutputPriceMicroUSDPer1KTokens: model.OutputPriceMicroUsdPer1kTokens,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return calculation.TotalCostMicro, nil
+}
+
+func sortLowestCostTargets(targets []ResolvedTarget) {
+	sort.SliceStable(targets, func(i, j int) bool {
+		if targets[i].EstimatedCostMicroUSD != targets[j].EstimatedCostMicroUSD {
+			return targets[i].EstimatedCostMicroUSD < targets[j].EstimatedCostMicroUSD
+		}
+		if targets[i].RouteTarget.Priority != targets[j].RouteTarget.Priority {
+			return targets[i].RouteTarget.Priority < targets[j].RouteTarget.Priority
+		}
+		return targets[i].RouteTarget.ID.String() < targets[j].RouteTarget.ID.String()
+	})
+}
+
+func parsePolicyConfig(raw json.RawMessage) (PolicyConfig, error) {
+	if len(raw) == 0 {
+		return PolicyConfig{}, nil
+	}
+	var cfg PolicyConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return PolicyConfig{}, err
+	}
+	if cfg.MaxEstimatedCostMicroUSD != nil && *cfg.MaxEstimatedCostMicroUSD < 0 {
+		return PolicyConfig{}, validationError("max_estimated_cost_micro_usd must be non-negative")
+	}
+	return cfg, nil
+}
+
+func (c PolicyConfig) fallbackToPriority() bool {
+	if c.FallbackToPriority == nil {
+		return true
+	}
+	return *c.FallbackToPriority
 }
 
 func validateCreateRoutePolicyParams(params CreateRoutePolicyParams) error {
@@ -233,14 +349,17 @@ func validateCreateRoutePolicyParams(params CreateRoutePolicyParams) error {
 	if strings.TrimSpace(params.MatchModel) == "" {
 		return validationError("match_model is required")
 	}
-	if params.Strategy != StrategySingle && params.Strategy != StrategyFallback {
-		return validationError("strategy must be single or fallback")
+	if !validStrategy(params.Strategy) {
+		return validationError("strategy must be single, fallback or lowest_cost")
 	}
 	if params.Strategy == StrategySingle && len(params.Targets) != 1 {
 		return validationError("single strategy requires exactly one target")
 	}
 	if params.Strategy == StrategyFallback && len(params.Targets) < 2 {
 		return validationError("fallback strategy requires at least two targets")
+	}
+	if params.Strategy == StrategyLowestCost && len(params.Targets) == 0 {
+		return validationError("lowest_cost strategy requires at least one target")
 	}
 	for _, target := range params.Targets {
 		if target.ProviderID == uuid.Nil {
@@ -257,6 +376,15 @@ func validateCreateRoutePolicyParams(params CreateRoutePolicyParams) error {
 		}
 	}
 	return nil
+}
+
+func validStrategy(strategy string) bool {
+	switch strategy {
+	case StrategySingle, StrategyFallback, StrategyLowestCost:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateTargetBelongsToOrg(ctx context.Context, q *db.Queries, orgID uuid.UUID, target TargetParams) error {
