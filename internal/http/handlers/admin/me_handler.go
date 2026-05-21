@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/tep/llm-cost-gateway/internal/auth"
 	httpapi "github.com/tep/llm-cost-gateway/internal/http"
 	"github.com/tep/llm-cost-gateway/internal/http/middleware"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
@@ -21,8 +22,11 @@ func NewMeHandler(queries *db.Queries) *MeHandler {
 }
 
 type meResponse struct {
-	Org        meOrgResponse        `json:"org"`
-	AdminToken meAdminTokenResponse `json:"admin_token"`
+	Org        meOrgResponse         `json:"org"`
+	ActorType  string                `json:"actor_type"`
+	Role       string                `json:"role"`
+	AdminToken *meAdminTokenResponse `json:"admin_token,omitempty"`
+	User       *meUserResponse       `json:"user,omitempty"`
 }
 
 type meOrgResponse struct {
@@ -37,6 +41,14 @@ type meAdminTokenResponse struct {
 	Scopes []string  `json:"scopes"`
 }
 
+type meUserResponse struct {
+	ID           uuid.UUID  `json:"id"`
+	Email        string     `json:"email"`
+	DisplayName  string     `json:"display_name"`
+	MembershipID *uuid.UUID `json:"membership_id,omitempty"`
+	SessionID    *uuid.UUID `json:"session_id,omitempty"`
+}
+
 func (h *MeHandler) Get(c *gin.Context) {
 	principal, ok := middleware.AdminTokenPrincipalFromContext(c)
 	if !ok {
@@ -49,27 +61,48 @@ func (h *MeHandler) Get(c *gin.Context) {
 		respondAdminReadError(c, err)
 		return
 	}
-	adminToken, err := h.queries.GetAdminToken(c.Request.Context(), db.GetAdminTokenParams{
-		OrgID: principal.OrgID,
-		ID:    principal.AdminTokenID,
-	})
-	if err != nil {
-		respondAdminReadError(c, err)
-		return
+	actorType := principal.ActorType
+	if actorType == "" {
+		actorType = auth.ActorServiceToken
 	}
-
-	httpapi.RespondJSON(c, http.StatusOK, meResponse{
+	response := meResponse{
 		Org: meOrgResponse{
 			ID:   org.ID,
 			Name: org.Name,
 			Slug: org.Slug,
 		},
-		AdminToken: meAdminTokenResponse{
+		ActorType: actorType,
+		Role:      principal.Role,
+	}
+	if principal.IsServiceToken() {
+		adminToken, err := h.queries.GetAdminToken(c.Request.Context(), db.GetAdminTokenParams{
+			OrgID: principal.OrgID,
+			ID:    principal.AdminTokenID,
+		})
+		if err != nil {
+			respondAdminReadError(c, err)
+			return
+		}
+		response.AdminToken = &meAdminTokenResponse{
 			ID:     adminToken.ID,
 			Name:   adminToken.Name,
 			Scopes: adminToken.Scopes,
-		},
-	})
+		}
+	} else {
+		userID := uuid.Nil
+		if principal.UserID != nil {
+			userID = *principal.UserID
+		}
+		response.User = &meUserResponse{
+			ID:           userID,
+			Email:        principal.UserEmail,
+			DisplayName:  principal.DisplayName,
+			MembershipID: principal.MembershipID,
+			SessionID:    principal.SessionID,
+		}
+	}
+
+	httpapi.RespondJSON(c, http.StatusOK, response)
 }
 
 func respondAdminReadError(c *gin.Context, err error) {

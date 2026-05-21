@@ -176,6 +176,7 @@ SELECT
   m.role AS membership_role,
   m.status AS membership_status,
   u.email AS user_email,
+  u.display_name AS user_display_name,
   u.status AS user_status
 FROM user_sessions s
 JOIN org_memberships m
@@ -200,6 +201,7 @@ type GetUserSessionByHashRow struct {
 	MembershipRole   string     `db:"membership_role" json:"membership_role"`
 	MembershipStatus string     `db:"membership_status" json:"membership_status"`
 	UserEmail        string     `db:"user_email" json:"user_email"`
+	UserDisplayName  string     `db:"user_display_name" json:"user_display_name"`
 	UserStatus       string     `db:"user_status" json:"user_status"`
 }
 
@@ -221,6 +223,7 @@ func (q *Queries) GetUserSessionByHash(ctx context.Context, tokenHash string) (G
 		&i.MembershipRole,
 		&i.MembershipStatus,
 		&i.UserEmail,
+		&i.UserDisplayName,
 		&i.UserStatus,
 	)
 	return i, err

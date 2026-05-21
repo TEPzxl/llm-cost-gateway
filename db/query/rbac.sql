@@ -109,6 +109,7 @@ SELECT
   m.role AS membership_role,
   m.status AS membership_status,
   u.email AS user_email,
+  u.display_name AS user_display_name,
   u.status AS user_status
 FROM user_sessions s
 JOIN org_memberships m

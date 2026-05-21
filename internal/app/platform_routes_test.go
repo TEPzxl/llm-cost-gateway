@@ -166,6 +166,9 @@ func resetTask5TestDatabase(t *testing.T, ctx context.Context, st *store.Store) 
 
 	_, err := st.Pool.Exec(ctx, `
 		TRUNCATE
+			user_sessions,
+			org_memberships,
+			users,
 			cost_records,
 			usage_records,
 			request_logs,

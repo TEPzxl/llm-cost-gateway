@@ -33,6 +33,13 @@ func (p AdminTokenPrincipal) CanManageMembers() bool {
 	return p.Role == RoleOwner
 }
 
+func (p AdminTokenPrincipal) CanViewMembers() bool {
+	if p.IsServiceToken() {
+		return true
+	}
+	return p.Role == RoleOwner || p.Role == RoleAdmin
+}
+
 func (p AdminTokenPrincipal) CanManageTokens() bool {
 	if p.IsServiceToken() {
 		return true

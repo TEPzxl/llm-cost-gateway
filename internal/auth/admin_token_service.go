@@ -33,6 +33,8 @@ type AdminTokenPrincipal struct {
 	UserID       *uuid.UUID
 	MembershipID *uuid.UUID
 	SessionID    *uuid.UUID
+	UserEmail    string
+	DisplayName  string
 	Scopes       []string
 }
 

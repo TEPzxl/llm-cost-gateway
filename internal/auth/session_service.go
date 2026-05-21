@@ -231,6 +231,8 @@ func (s *SessionService) Authenticate(ctx context.Context, token string) (AdminT
 		UserID:       &userID,
 		MembershipID: &membershipID,
 		SessionID:    &sessionID,
+		UserEmail:    session.UserEmail,
+		DisplayName:  session.UserDisplayName,
 	}, nil
 }
 
