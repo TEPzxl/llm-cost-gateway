@@ -5,7 +5,7 @@ import type { Model, Provider, RoutePolicy } from "../api/types";
 import { DataTable } from "../components/DataTable";
 import { formValue, preventDefault, type PageProps } from "./pageUtils";
 
-type RouteStrategy = "single" | "fallback" | "lowest_cost";
+type RouteStrategy = "single" | "fallback" | "lowest_cost" | "lowest_latency";
 
 type TargetForm = {
   providerID: string;
@@ -27,6 +27,7 @@ export function RoutePoliciesPage({ client }: PageProps) {
   const [targets, setTargets] = useState<TargetForm[]>([emptyTarget()]);
   const [maxEstimatedCost, setMaxEstimatedCost] = useState("");
   const [fallbackToPriority, setFallbackToPriority] = useState(true);
+  const [latencyWindowMinutes, setLatencyWindowMinutes] = useState("15");
   const [error, setError] = useState("");
 
   async function load() {
@@ -112,6 +113,17 @@ export function RoutePoliciesPage({ client }: PageProps) {
       setError("Max estimated cost must be zero or greater.");
       return;
     }
+    const parsedLatencyWindow =
+      latencyWindowMinutes === "" ? undefined : Number(latencyWindowMinutes);
+    if (
+      strategy === "lowest_latency" &&
+      (parsedLatencyWindow === undefined ||
+        !Number.isFinite(parsedLatencyWindow) ||
+        parsedLatencyWindow <= 0)
+    ) {
+      setError("Latency window must be greater than zero.");
+      return;
+    }
     setError("");
     await client.createRoutePolicy({
       name,
@@ -127,6 +139,13 @@ export function RoutePoliciesPage({ client }: PageProps) {
             }
           }
         : {}),
+      ...(strategy === "lowest_latency"
+        ? {
+            config: {
+              latency_window_minutes: Math.trunc(parsedLatencyWindow ?? 15)
+            }
+          }
+        : {}),
       targets: activeTargets.map((target, index) => ({
         provider_id: target.providerID,
         model_id: target.modelID,
@@ -139,6 +158,7 @@ export function RoutePoliciesPage({ client }: PageProps) {
     setTargets([emptyTarget()]);
     setMaxEstimatedCost("");
     setFallbackToPriority(true);
+    setLatencyWindowMinutes("15");
     await load();
   }
 
@@ -158,7 +178,7 @@ export function RoutePoliciesPage({ client }: PageProps) {
           <div className="field span-2">
             <span>Strategy</span>
             <div className="segmented" role="group" aria-label="Route strategy">
-              {(["single", "fallback", "lowest_cost"] as RouteStrategy[]).map((item) => (
+              {(["single", "fallback", "lowest_cost", "lowest_latency"] as RouteStrategy[]).map((item) => (
                 <button
                   key={item}
                   className={strategy === item ? "button-secondary active" : "button-secondary"}
@@ -197,6 +217,26 @@ export function RoutePoliciesPage({ client }: PageProps) {
                     <option value="true">Enabled</option>
                     <option value="false">Disabled</option>
                   </select>
+                </label>
+              </div>
+            </div>
+          )}
+          {strategy === "lowest_latency" && (
+            <div className="field span-2">
+              <span>Latency Controls</span>
+              <div className="target-row">
+                <label className="target-field">
+                  <span>Stats window minutes</span>
+                  <input
+                    className="input"
+                    min="1"
+                    name="latency_window_minutes"
+                    placeholder="15"
+                    step="1"
+                    type="number"
+                    value={latencyWindowMinutes}
+                    onChange={(event) => setLatencyWindowMinutes(event.target.value)}
+                  />
                 </label>
               </div>
             </div>
@@ -257,7 +297,7 @@ export function RoutePoliciesPage({ client }: PageProps) {
                       className="button-secondary target-remove"
                       type="button"
                       onClick={() => removeTarget(index)}
-                    disabled={targets.length <= (strategy === "fallback" ? 2 : 1)}
+                      disabled={targets.length <= (strategy === "fallback" ? 2 : 1)}
                     >
                       Remove
                     </button>
@@ -302,10 +342,13 @@ export function RoutePoliciesPage({ client }: PageProps) {
 }
 
 function routePolicyConfigLabel(item: RoutePolicy) {
-  if (item.strategy !== "lowest_cost") {
-    return "-";
+  if (item.strategy === "lowest_latency") {
+    return `${item.config?.latency_window_minutes ?? 15}m window`;
   }
-  const maxCost = item.config?.max_estimated_cost_micro_usd;
-  const fallback = item.config?.fallback_to_priority ?? true;
-  return `${maxCost === undefined ? "no cap" : `${maxCost} micro USD`} / ${fallback ? "fallback" : "strict"}`;
+  if (item.strategy === "lowest_cost") {
+    const maxCost = item.config?.max_estimated_cost_micro_usd;
+    const fallback = item.config?.fallback_to_priority ?? true;
+    return `${maxCost === undefined ? "no cap" : `${maxCost} micro USD`} / ${fallback ? "fallback" : "strict"}`;
+  }
+  return "-";
 }

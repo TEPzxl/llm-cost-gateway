@@ -80,7 +80,7 @@ export type RoutePolicy = {
   id: ID;
   name: string;
   match_model: string;
-  strategy: "single" | "fallback" | "lowest_cost" | string;
+  strategy: "single" | "fallback" | "lowest_cost" | "lowest_latency" | string;
   config?: RoutePolicyConfig;
   status: string;
   created_at: string;
@@ -89,12 +89,13 @@ export type RoutePolicy = {
 export type RoutePolicyConfig = {
   max_estimated_cost_micro_usd?: number;
   fallback_to_priority?: boolean;
+  latency_window_minutes?: number;
 };
 
 export type CreateRoutePolicyRequest = {
   name: string;
   match_model: string;
-  strategy: "single" | "fallback" | "lowest_cost";
+  strategy: "single" | "fallback" | "lowest_cost" | "lowest_latency";
   config?: RoutePolicyConfig;
   targets: Array<{
     provider_id: ID;
