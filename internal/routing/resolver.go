@@ -46,6 +46,7 @@ type CreateRoutePolicyParams struct {
 	Name       string
 	MatchModel string
 	Strategy   string
+	Config     json.RawMessage
 	Targets    []TargetParams
 }
 
@@ -105,13 +106,17 @@ func (s *Service) CreateRoutePolicy(ctx context.Context, params CreateRoutePolic
 			}
 		}
 
+		config, err := normalizePolicyConfig(params.Config)
+		if err != nil {
+			return err
+		}
 		policy, err := q.CreateRoutePolicy(ctx, db.CreateRoutePolicyParams{
 			ID:         uuid.New(),
 			OrgID:      params.OrgID,
 			Name:       strings.TrimSpace(params.Name),
 			MatchModel: strings.TrimSpace(params.MatchModel),
 			Strategy:   params.Strategy,
-			Config:     json.RawMessage(`{}`),
+			Config:     config,
 			Status:     "active",
 			CreatedAt:  now,
 			UpdatedAt:  now,
@@ -376,6 +381,23 @@ func validateCreateRoutePolicyParams(params CreateRoutePolicyParams) error {
 		}
 	}
 	return nil
+}
+
+func normalizePolicyConfig(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return json.RawMessage(`{}`), nil
+	}
+	if !json.Valid(raw) {
+		return nil, validationError("config must be valid JSON")
+	}
+	cfg, err := parsePolicyConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.MaxEstimatedCostMicroUSD == nil && cfg.FallbackToPriority == nil {
+		return append(json.RawMessage(nil), raw...), nil
+	}
+	return append(json.RawMessage(nil), raw...), nil
 }
 
 func validStrategy(strategy string) bool {

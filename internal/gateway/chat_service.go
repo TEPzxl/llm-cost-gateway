@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -207,8 +208,10 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	}
 
 	resolved, err := s.resolver.ResolveTargets(ctx, routing.ResolveParams{
-		OrgID:          input.Principal.OrgID,
-		RequestedModel: request.Model,
+		OrgID:                 input.Principal.OrgID,
+		RequestedModel:        request.Model,
+		EstimatedPromptTokens: estimatePromptTokens(request.Messages),
+		EstimatedMaxTokens:    estimateMaxTokens(request.MaxTokens),
 	})
 	if err != nil {
 		if errors.Is(err, routing.ErrRouteNotFound) {
@@ -399,6 +402,28 @@ func (s *ChatService) recordFailure(ctx context.Context, input ChatInput, reques
 		CompletedAt:  s.clock(),
 	})
 	return err
+}
+
+func estimatePromptTokens(messages []contract.ChatMessage) int64 {
+	var totalRunes int
+	for _, message := range messages {
+		totalRunes += utf8.RuneCountInString(message.Content)
+	}
+	if totalRunes == 0 && len(messages) > 0 {
+		return 1
+	}
+	tokens := int64((totalRunes + 3) / 4)
+	if tokens < 1 && len(messages) > 0 {
+		return 1
+	}
+	return tokens
+}
+
+func estimateMaxTokens(maxTokens *int) int64 {
+	if maxTokens == nil || *maxTokens <= 0 {
+		return 0
+	}
+	return int64(*maxTokens)
 }
 
 func (s *ChatService) providerConfig(ctx context.Context, item db.Provider) (contract.ProviderConfig, error) {

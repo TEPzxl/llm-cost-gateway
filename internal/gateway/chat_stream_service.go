@@ -62,8 +62,10 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 	}
 
 	resolved, err := s.resolver.Resolve(ctx, routing.ResolveParams{
-		OrgID:          input.Principal.OrgID,
-		RequestedModel: request.Model,
+		OrgID:                 input.Principal.OrgID,
+		RequestedModel:        request.Model,
+		EstimatedPromptTokens: estimatePromptTokens(request.Messages),
+		EstimatedMaxTokens:    estimateMaxTokens(request.MaxTokens),
 	})
 	if err != nil {
 		if errors.Is(err, routing.ErrRouteNotFound) {

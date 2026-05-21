@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -25,6 +26,7 @@ type createRoutePolicyRequest struct {
 	Name       string                     `json:"name"`
 	MatchModel string                     `json:"match_model"`
 	Strategy   string                     `json:"strategy"`
+	Config     json.RawMessage            `json:"config,omitempty"`
 	Targets    []createRouteTargetRequest `json:"targets"`
 }
 
@@ -36,12 +38,13 @@ type createRouteTargetRequest struct {
 }
 
 type routePolicyResponse struct {
-	ID         uuid.UUID `json:"id"`
-	Name       string    `json:"name"`
-	MatchModel string    `json:"match_model"`
-	Strategy   string    `json:"strategy"`
-	Status     string    `json:"status"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID         uuid.UUID       `json:"id"`
+	Name       string          `json:"name"`
+	MatchModel string          `json:"match_model"`
+	Strategy   string          `json:"strategy"`
+	Config     json.RawMessage `json:"config"`
+	Status     string          `json:"status"`
+	CreatedAt  time.Time       `json:"created_at"`
 }
 
 type listRoutePoliciesResponse struct {
@@ -76,6 +79,7 @@ func (h *RoutePolicyHandler) Create(c *gin.Context) {
 		Name:       request.Name,
 		MatchModel: request.MatchModel,
 		Strategy:   request.Strategy,
+		Config:     request.Config,
 		Targets:    targets,
 	})
 	if err != nil {
@@ -112,6 +116,7 @@ func newRoutePolicyResponse(policy db.RoutePolicy) routePolicyResponse {
 		Name:       policy.Name,
 		MatchModel: policy.MatchModel,
 		Strategy:   policy.Strategy,
+		Config:     policy.Config,
 		Status:     policy.Status,
 		CreatedAt:  policy.CreatedAt,
 	}

@@ -281,6 +281,52 @@ func TestGatewayChatCompletionsFallbackAllTargetsFail(t *testing.T) {
 	assertAppRequestLogFallbackCount(t, ctx, st, 1)
 }
 
+func TestGatewayChatCompletionsLowestCostSelectsCheapestTarget(t *testing.T) {
+	router, _, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	expensiveProvider := createProviderViaHTTP(t, router, apiKey.AdminToken, createProviderRequest{
+		Name:      "expensive-provider",
+		Type:      "mock",
+		APIKey:    stringPtr("mock-key"),
+		TimeoutMS: 30000,
+	})
+	expensiveModel := createModelViaHTTP(t, router, apiKey.AdminToken, createModelRequest{
+		ProviderID:                     expensiveProvider.ID,
+		ProviderModelName:              "expensive-model",
+		DisplayName:                    "Expensive Model",
+		InputPriceMicroUSDPer1KTokens:  1000,
+		OutputPriceMicroUSDPer1KTokens: 1000,
+	})
+	cheapProvider := createProviderViaHTTP(t, router, apiKey.AdminToken, createProviderRequest{
+		Name:      "cheap-provider",
+		Type:      "mock",
+		APIKey:    stringPtr("mock-key"),
+		TimeoutMS: 30000,
+	})
+	cheapModel := createModelViaHTTP(t, router, apiKey.AdminToken, createModelRequest{
+		ProviderID:                     cheapProvider.ID,
+		ProviderModelName:              "cheap-model",
+		DisplayName:                    "Cheap Model",
+		InputPriceMicroUSDPer1KTokens:  10,
+		OutputPriceMicroUSDPer1KTokens: 10,
+	})
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "cost-chat",
+		MatchModel: "cost-chat",
+		Strategy:   "lowest_cost",
+		Config:     json.RawMessage(`{"fallback_to_priority":true}`),
+		Targets: []createRouteTargetRequest{
+			{ProviderID: expensiveProvider.ID, ModelID: expensiveModel.ID, Priority: 1, Weight: 100},
+			{ProviderID: cheapProvider.ID, ModelID: cheapModel.ID, Priority: 2, Weight: 100},
+		},
+	})
+
+	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"cost-chat","messages":[{"role":"user","content":"hello world"}],"max_tokens":100}`)
+	body := decodeGatewayChatResponse(t, rec)
+	if body.Provider.ID != cheapProvider.ID {
+		t.Fatalf("provider id = %s, want cheapest provider %s", body.Provider.ID, cheapProvider.ID)
+	}
+}
+
 func TestGatewayChatCompletionsRetriesRetryableProviderError(t *testing.T) {
 	ctx := context.Background()
 	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
@@ -671,7 +717,10 @@ func performChatCompletion(t *testing.T, router http.Handler, apiKey string, bod
 
 type gatewayChatResponseBody struct {
 	RequestID uuid.UUID `json:"request_id"`
-	Cost      struct {
+	Provider  struct {
+		ID uuid.UUID `json:"id"`
+	} `json:"provider"`
+	Cost struct {
 		TotalCostMicro int64 `json:"total_cost_micro"`
 	} `json:"cost"`
 }

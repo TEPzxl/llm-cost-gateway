@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,9 @@ func TestAdminRoutePolicyRoutesCreateAndListPolicy(t *testing.T) {
 	})
 	if policy.MatchModel != "fast-chat" {
 		t.Fatalf("match_model = %q, want fast-chat", policy.MatchModel)
+	}
+	if string(policy.Config) != "{}" {
+		t.Fatalf("config = %s, want {}", string(policy.Config))
 	}
 
 	targets, err := st.Queries.ListRouteTargets(ctx, db.ListRouteTargetsParams{
@@ -137,6 +141,53 @@ func TestAdminRoutePolicyRoutesCreateFallbackPolicyWithMultipleTargets(t *testin
 	}
 }
 
+func TestAdminRoutePolicyRoutesCreateLowestCostPolicyWithConfig(t *testing.T) {
+	ctx := context.Background()
+	router, st := newTask5TestRouter(t)
+	orgID := createOrgViaHTTP(t, router, "Lowest Cost Route Org", "lowest-cost-route-org")
+	adminToken := createAdminTokenViaHTTP(t, router, orgID)
+	provider := createProviderViaHTTP(t, router, adminToken.Token, createProviderRequest{
+		Name:      "mock-provider",
+		Type:      "mock",
+		TimeoutMS: 30000,
+	})
+	model := createModelViaHTTP(t, router, adminToken.Token, createModelRequest{
+		ProviderID:                     provider.ID,
+		ProviderModelName:              "mock-small",
+		DisplayName:                    "Mock Small",
+		InputPriceMicroUSDPer1KTokens:  100,
+		OutputPriceMicroUSDPer1KTokens: 200,
+	})
+
+	config := json.RawMessage(`{"max_estimated_cost_micro_usd":50000,"fallback_to_priority":false}`)
+	policy := createRoutePolicyViaHTTP(t, router, adminToken.Token, createRoutePolicyRequest{
+		Name:       "lowest-cost-policy",
+		MatchModel: "cost-chat",
+		Strategy:   "lowest_cost",
+		Config:     config,
+		Targets: []createRouteTargetRequest{{
+			ProviderID: provider.ID,
+			ModelID:    model.ID,
+			Priority:   1,
+			Weight:     100,
+		}},
+	})
+	if policy.Strategy != "lowest_cost" {
+		t.Fatalf("strategy = %q, want lowest_cost", policy.Strategy)
+	}
+	if !jsonEqual(policy.Config, config) {
+		t.Fatalf("config = %s, want %s", string(policy.Config), string(config))
+	}
+
+	stored, err := st.Queries.GetRoutePolicy(ctx, db.GetRoutePolicyParams{OrgID: orgID, ID: policy.ID})
+	if err != nil {
+		t.Fatalf("GetRoutePolicy returned error: %v", err)
+	}
+	if !jsonEqual(stored.Config, config) {
+		t.Fatalf("stored config = %s, want %s", string(stored.Config), string(config))
+	}
+}
+
 func TestAdminRoutePolicyRoutesRejectFallbackWithSingleTarget(t *testing.T) {
 	router, _ := newTask5TestRouter(t)
 	orgID := createOrgViaHTTP(t, router, "Fallback Single Org", "fallback-single-org")
@@ -222,6 +273,7 @@ type createRoutePolicyRequest struct {
 	Name       string                     `json:"name"`
 	MatchModel string                     `json:"match_model"`
 	Strategy   string                     `json:"strategy"`
+	Config     json.RawMessage            `json:"config,omitempty"`
 	Targets    []createRouteTargetRequest `json:"targets"`
 }
 
@@ -233,12 +285,13 @@ type createRouteTargetRequest struct {
 }
 
 type routePolicyResponse struct {
-	ID         uuid.UUID `json:"id"`
-	Name       string    `json:"name"`
-	MatchModel string    `json:"match_model"`
-	Strategy   string    `json:"strategy"`
-	Status     string    `json:"status"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID         uuid.UUID       `json:"id"`
+	Name       string          `json:"name"`
+	MatchModel string          `json:"match_model"`
+	Strategy   string          `json:"strategy"`
+	Config     json.RawMessage `json:"config"`
+	Status     string          `json:"status"`
+	CreatedAt  time.Time       `json:"created_at"`
 }
 
 func createRoutePolicyViaHTTP(t *testing.T, router http.Handler, adminToken string, body createRoutePolicyRequest) routePolicyResponse {
@@ -263,4 +316,16 @@ func createRoutePolicyViaHTTP(t *testing.T, router http.Handler, adminToken stri
 		t.Fatalf("decode create route policy response: %v", err)
 	}
 	return response
+}
+
+func jsonEqual(left json.RawMessage, right json.RawMessage) bool {
+	var leftValue any
+	var rightValue any
+	if err := json.Unmarshal(left, &leftValue); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(right, &rightValue); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(leftValue, rightValue)
 }
