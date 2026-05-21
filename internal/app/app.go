@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/tep/llm-cost-gateway/internal/analytics"
 	"github.com/tep/llm-cost-gateway/internal/config"
 	"github.com/tep/llm-cost-gateway/internal/events"
 	"github.com/tep/llm-cost-gateway/internal/http/middleware"
@@ -45,15 +46,24 @@ func New(ctx context.Context, cfg Config, logger *zap.Logger) (*App, error) {
 		st.Close()
 		return nil, fmt.Errorf("init usage event publisher: %w", err)
 	}
+	usageAnalytics, analyticsCloser, err := newUsageAnalyticsService(ctx, cfg, st)
+	if err != nil {
+		if publisherCloser != nil {
+			_ = publisherCloser.Close()
+		}
+		_ = redisClient.Close()
+		st.Close()
+		return nil, fmt.Errorf("init usage analytics: %w", err)
+	}
 
-	return newWithDependencies(cfg, logger, st, redisClient, ratelimit.NewRedisLimiter(redisClient), publisher, publisherCloser), nil
+	return newWithDependencies(cfg, logger, st, redisClient, ratelimit.NewRedisLimiter(redisClient), publisher, publisherCloser, usageAnalytics, analyticsCloser), nil
 }
 
 func NewWithStore(cfg Config, logger *zap.Logger, st *store.Store) *App {
-	return newWithDependencies(cfg, logger, st, nil, nil, events.DisabledPublisher{}, nil)
+	return newWithDependencies(cfg, logger, st, nil, nil, events.DisabledPublisher{}, nil, analytics.NewUsageAnalyticsService(st, nil, false), nil)
 }
 
-func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisClient *redis.Client, limiter middleware.RateLimiter, usageEventPublisher events.Publisher, usageEventCloser io.Closer) *App {
+func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisClient *redis.Client, limiter middleware.RateLimiter, usageEventPublisher events.Publisher, usageEventCloser io.Closer, usageAnalytics *analytics.UsageAnalyticsService, analyticsCloser io.Closer) *App {
 	router := NewRouter(RouterConfig{
 		AppEnv:                 cfg.AppEnv,
 		PlatformBootstrapToken: cfg.PlatformBootstrapToken,
@@ -65,6 +75,7 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 		RateLimiter:            limiter,
 		Metrics:                observability.NewMetrics(),
 		UsageEventPublisher:    usageEventPublisher,
+		UsageAnalytics:         usageAnalytics,
 	}, logger)
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.ServerPort),
@@ -78,7 +89,7 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 		server: server,
 		store:  st,
 		redis:  redisClient,
-		events: usageEventCloser,
+		events: multiCloser(usageEventCloser, analyticsCloser),
 	}
 }
 
@@ -94,6 +105,43 @@ func newUsageEventPublisher(cfg Config) (events.Publisher, io.Closer, error) {
 		return nil, nil, err
 	}
 	return producer, producer, nil
+}
+
+func newUsageAnalyticsService(ctx context.Context, cfg Config, st *store.Store) (*analytics.UsageAnalyticsService, io.Closer, error) {
+	if !cfg.ClickHouseEnabled {
+		return analytics.NewUsageAnalyticsService(st, nil, false), nil, nil
+	}
+	client, err := analytics.NewClickHouseClient(analytics.ClickHouseConfig{
+		URL:      cfg.ClickHouseURL,
+		Database: cfg.ClickHouseDatabase,
+		Username: cfg.ClickHouseUsername,
+		Password: cfg.ClickHousePassword,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := client.Ping(ctx); err != nil {
+		_ = client.Close()
+		return nil, nil, err
+	}
+	return analytics.NewUsageAnalyticsService(st, client, true), client, nil
+}
+
+func multiCloser(closers ...io.Closer) io.Closer {
+	return closerFunc(func() error {
+		for _, closer := range closers {
+			if closer != nil {
+				_ = closer.Close()
+			}
+		}
+		return nil
+	})
+}
+
+type closerFunc func() error
+
+func (f closerFunc) Close() error {
+	return f()
 }
 
 func (a *App) Run() error {

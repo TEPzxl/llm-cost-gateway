@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/tep/llm-cost-gateway/internal/analytics"
 	"github.com/tep/llm-cost-gateway/internal/costing"
 	"github.com/tep/llm-cost-gateway/internal/domain"
 	"github.com/tep/llm-cost-gateway/internal/events"
@@ -185,6 +186,98 @@ func TestServicePublishFailureDoesNotRollbackSuccess(t *testing.T) {
 	assertTableCount(t, ctx, st, "cost_records", 1)
 }
 
+func TestServiceRecordSuccessWritesAnalyticsRecord(t *testing.T) {
+	ctx := context.Background()
+	st := openMeteringTestStore(t, ctx)
+	resetMeteringTestDatabase(t, ctx, st)
+	fixture := createMeteringFixture(t, ctx, st)
+	sink := &capturingAnalyticsSink{}
+	service := NewService(st, costing.NewCalculator(), WithUsageAnalyticsSink(sink))
+
+	requestID := uuid.New()
+	_, err := service.RecordSuccess(ctx, RecordSuccessInput{
+		RequestID:                      requestID,
+		OrgID:                          fixture.OrgID,
+		APIKeyID:                       fixture.APIKeyID,
+		ProviderID:                     fixture.ProviderID,
+		ModelID:                        fixture.ModelID,
+		Method:                         "POST",
+		Path:                           "/v1/chat/completions",
+		RequestModel:                   "fast-chat",
+		StatusCode:                     200,
+		RequestHash:                    "sha256:request-hash",
+		ResponseHash:                   "sha256:response-hash",
+		LatencyMS:                      123,
+		PromptTokens:                   20,
+		CompletionTokens:               30,
+		InputPriceMicroUSDPer1KTokens:  100,
+		OutputPriceMicroUSDPer1KTokens: 200,
+		StartedAt:                      time.Now().UTC().Add(-time.Second),
+		CompletedAt:                    time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("RecordSuccess returned error: %v", err)
+	}
+	if len(sink.records) != 1 {
+		t.Fatalf("analytics records = %d, want 1", len(sink.records))
+	}
+	record := sink.records[0]
+	if record.RequestID != requestID || record.OrgID != fixture.OrgID {
+		t.Fatalf("record ids = %+v, want request/org ids", record)
+	}
+	if record.APIKeyID == nil || *record.APIKeyID != fixture.APIKeyID {
+		t.Fatalf("api_key_id = %v, want %s", record.APIKeyID, fixture.APIKeyID)
+	}
+	if record.ProviderID == nil || *record.ProviderID != fixture.ProviderID {
+		t.Fatalf("provider_id = %v, want %s", record.ProviderID, fixture.ProviderID)
+	}
+	if record.ModelID == nil || *record.ModelID != fixture.ModelID {
+		t.Fatalf("model_id = %v, want %s", record.ModelID, fixture.ModelID)
+	}
+	if record.PromptTokens != 20 || record.CompletionTokens != 30 || record.TotalTokens != 50 || record.TotalCostMicroUSD != 8 {
+		t.Fatalf("analytics record totals = %+v, want tokens=50 cost=8", record)
+	}
+	if record.LatencyMS != 123 || record.Status != StatusSuccess {
+		t.Fatalf("analytics record status/latency = %+v, want success/123", record)
+	}
+}
+
+func TestServiceAnalyticsFailureDoesNotRollbackSuccess(t *testing.T) {
+	ctx := context.Background()
+	st := openMeteringTestStore(t, ctx)
+	resetMeteringTestDatabase(t, ctx, st)
+	fixture := createMeteringFixture(t, ctx, st)
+	service := NewService(st, costing.NewCalculator(), WithUsageAnalyticsSink(failingAnalyticsSink{}))
+
+	_, err := service.RecordSuccess(ctx, RecordSuccessInput{
+		RequestID:                      uuid.New(),
+		OrgID:                          fixture.OrgID,
+		APIKeyID:                       fixture.APIKeyID,
+		ProviderID:                     fixture.ProviderID,
+		ModelID:                        fixture.ModelID,
+		Method:                         "POST",
+		Path:                           "/v1/chat/completions",
+		RequestModel:                   "fast-chat",
+		StatusCode:                     200,
+		RequestHash:                    "sha256:request-hash",
+		ResponseHash:                   "sha256:response-hash",
+		LatencyMS:                      100,
+		PromptTokens:                   20,
+		CompletionTokens:               30,
+		InputPriceMicroUSDPer1KTokens:  100,
+		OutputPriceMicroUSDPer1KTokens: 200,
+		StartedAt:                      time.Now().UTC().Add(-time.Second),
+		CompletedAt:                    time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("RecordSuccess returned error: %v", err)
+	}
+
+	assertTableCount(t, ctx, st, "request_logs", 1)
+	assertTableCount(t, ctx, st, "usage_records", 1)
+	assertTableCount(t, ctx, st, "cost_records", 1)
+}
+
 func TestServiceRecordFailureWritesOnlyRequestLog(t *testing.T) {
 	ctx := context.Background()
 	st := openMeteringTestStore(t, ctx)
@@ -221,6 +314,47 @@ func TestServiceRecordFailureWritesOnlyRequestLog(t *testing.T) {
 	assertTableCount(t, ctx, st, "request_logs", 1)
 	assertTableCount(t, ctx, st, "usage_records", 0)
 	assertTableCount(t, ctx, st, "cost_records", 0)
+}
+
+func TestServiceRecordFailureWritesAnalyticsRecord(t *testing.T) {
+	ctx := context.Background()
+	st := openMeteringTestStore(t, ctx)
+	resetMeteringTestDatabase(t, ctx, st)
+	fixture := createMeteringFixture(t, ctx, st)
+	sink := &capturingAnalyticsSink{}
+	service := NewService(st, costing.NewCalculator(), WithUsageAnalyticsSink(sink))
+
+	requestID := uuid.New()
+	_, err := service.RecordFailure(ctx, RecordFailureInput{
+		RequestID:    requestID,
+		OrgID:        fixture.OrgID,
+		APIKeyID:     &fixture.APIKeyID,
+		ProviderID:   &fixture.ProviderID,
+		ModelID:      &fixture.ModelID,
+		Method:       "POST",
+		Path:         "/v1/chat/completions",
+		RequestModel: "fast-chat",
+		Status:       StatusError,
+		StatusCode:   502,
+		ErrorCode:    "provider_error",
+		RequestHash:  "sha256:request-hash",
+		LatencyMS:    456,
+		StartedAt:    time.Now().UTC().Add(-time.Second),
+		CompletedAt:  time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("RecordFailure returned error: %v", err)
+	}
+	if len(sink.records) != 1 {
+		t.Fatalf("analytics records = %d, want 1", len(sink.records))
+	}
+	record := sink.records[0]
+	if record.RequestID != requestID || record.Status != StatusError || record.LatencyMS != 456 {
+		t.Fatalf("analytics record = %+v, want request/status/latency", record)
+	}
+	if record.TotalTokens != 0 || record.TotalCostMicroUSD != 0 {
+		t.Fatalf("analytics record totals = %+v, want zero tokens/cost", record)
+	}
 }
 
 func TestServiceRecordBudgetBlockPublishesBlockedEvent(t *testing.T) {
@@ -587,4 +721,19 @@ type failingPublisher struct{}
 
 func (failingPublisher) Publish(context.Context, events.UsageEvent) error {
 	return errors.New("publish failed")
+}
+
+type capturingAnalyticsSink struct {
+	records []analytics.UsageRecord
+}
+
+func (s *capturingAnalyticsSink) WriteUsageRecord(_ context.Context, record analytics.UsageRecord) error {
+	s.records = append(s.records, record)
+	return nil
+}
+
+type failingAnalyticsSink struct{}
+
+func (failingAnalyticsSink) WriteUsageRecord(context.Context, analytics.UsageRecord) error {
+	return errors.New("analytics write failed")
 }

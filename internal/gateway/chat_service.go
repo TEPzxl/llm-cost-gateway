@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/tep/llm-cost-gateway/internal/analytics"
 	"github.com/tep/llm-cost-gateway/internal/auth"
 	"github.com/tep/llm-cost-gateway/internal/budget"
 	"github.com/tep/llm-cost-gateway/internal/costing"
@@ -40,6 +41,7 @@ type ChatService struct {
 	secretEncryptionKey string
 	clock               func() time.Time
 	usageEvents         events.Publisher
+	usageAnalytics      analytics.Sink
 	logger              *zap.Logger
 }
 
@@ -57,6 +59,14 @@ func WithLogger(logger *zap.Logger) ChatServiceOption {
 	return func(s *ChatService) {
 		if logger != nil {
 			s.logger = logger
+		}
+	}
+}
+
+func WithUsageAnalyticsSink(sink analytics.Sink) ChatServiceOption {
+	return func(s *ChatService) {
+		if sink != nil {
+			s.usageAnalytics = sink
 		}
 	}
 }
@@ -140,6 +150,7 @@ func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observ
 		secretEncryptionKey: secretEncryptionKey,
 		clock:               func() time.Time { return time.Now().UTC() },
 		usageEvents:         events.DisabledPublisher{},
+		usageAnalytics:      analytics.DisabledSink{},
 		logger:              zap.NewNop(),
 	}
 	for _, opt := range opts {
@@ -149,6 +160,7 @@ func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observ
 		st,
 		costing.NewCalculator(),
 		metering.WithUsageEventPublisher(service.usageEvents),
+		metering.WithUsageAnalyticsSink(service.usageAnalytics),
 		metering.WithLogger(service.logger),
 		metering.WithMetrics(metrics),
 	)

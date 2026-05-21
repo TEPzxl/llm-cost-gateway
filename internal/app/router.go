@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/tep/llm-cost-gateway/internal/analytics"
 	"github.com/tep/llm-cost-gateway/internal/audit"
 	"github.com/tep/llm-cost-gateway/internal/auth"
 	"github.com/tep/llm-cost-gateway/internal/budget"
@@ -32,6 +33,7 @@ type RouterConfig struct {
 	RateLimiter            middleware.RateLimiter
 	Metrics                *observability.Metrics
 	UsageEventPublisher    events.Publisher
+	UsageAnalytics         *analytics.UsageAnalyticsService
 	Logger                 *zap.Logger
 }
 
@@ -52,12 +54,15 @@ func NewRouter(cfg RouterConfig, logger *zap.Logger) *gin.Engine {
 	if metrics == nil {
 		metrics = observability.NewMetrics()
 	}
+	cfg.Metrics = metrics
+	if cfg.Store != nil && cfg.UsageAnalytics == nil {
+		cfg.UsageAnalytics = analytics.NewUsageAnalyticsService(cfg.Store, nil, false)
+	}
 	router.GET("/metrics", gin.WrapH(metrics.Handler()))
 
 	if cfg.Store != nil {
 		registerPlatformRoutes(router, cfg)
 		registerAdminRoutes(router, cfg)
-		cfg.Metrics = metrics
 		if cfg.RateLimiter != nil {
 			registerGatewayRoutes(router, cfg)
 		}
@@ -68,13 +73,20 @@ func NewRouter(cfg RouterConfig, logger *zap.Logger) *gin.Engine {
 
 func registerGatewayRoutes(router *gin.Engine, cfg RouterConfig) {
 	apiKeyService := auth.NewAPIKeyService(cfg.Store.Queries, cfg.TokenHashSecret)
-	meteringService := metering.NewService(cfg.Store, costing.NewCalculator())
+	meteringService := metering.NewService(
+		cfg.Store,
+		costing.NewCalculator(),
+		metering.WithUsageAnalyticsSink(cfg.UsageAnalytics),
+		metering.WithLogger(cfg.Logger),
+		metering.WithMetrics(cfg.Metrics),
+	)
 	chatService := gatewayservice.NewChatService(
 		cfg.Store,
 		cfg.SecretEncryptionKey,
 		cfg.Metrics,
 		gatewayservice.NewRetryPolicy(cfg.MaxRetries, cfg.RetryBackoffMS),
 		gatewayservice.WithUsageEventPublisher(cfg.UsageEventPublisher),
+		gatewayservice.WithUsageAnalyticsSink(cfg.UsageAnalytics),
 		gatewayservice.WithLogger(cfg.Logger),
 	)
 	chatHandler := gatewayhandler.NewChatCompletionsHandler(chatService)

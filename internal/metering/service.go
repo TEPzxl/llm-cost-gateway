@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/tep/llm-cost-gateway/internal/analytics"
 	"github.com/tep/llm-cost-gateway/internal/costing"
 	"github.com/tep/llm-cost-gateway/internal/domain"
 	"github.com/tep/llm-cost-gateway/internal/events"
@@ -36,6 +37,7 @@ type Service struct {
 	publisher  events.Publisher
 	logger     *zap.Logger
 	metrics    *observability.Metrics
+	analytics  analytics.Sink
 }
 
 type Option func(*Service)
@@ -59,6 +61,14 @@ func WithLogger(logger *zap.Logger) Option {
 func WithMetrics(metrics *observability.Metrics) Option {
 	return func(s *Service) {
 		s.metrics = metrics
+	}
+}
+
+func WithUsageAnalyticsSink(sink analytics.Sink) Option {
+	return func(s *Service) {
+		if sink != nil {
+			s.analytics = sink
+		}
 	}
 }
 
@@ -126,6 +136,7 @@ func NewService(st *store.Store, calculator *costing.Calculator, opts ...Option)
 		now:        func() time.Time { return time.Now().UTC() },
 		publisher:  events.DisabledPublisher{},
 		logger:     zap.NewNop(),
+		analytics:  analytics.DisabledSink{},
 	}
 	for _, opt := range opts {
 		opt(service)
@@ -246,6 +257,20 @@ func (s *Service) RecordSuccess(ctx context.Context, input RecordSuccessInput) (
 		Status:            result.RequestLog.Status,
 		CreatedAt:         result.UsageRecord.CreatedAt,
 	})
+	s.writeAnalyticsRecord(ctx, analytics.UsageRecord{
+		RequestID:         result.RequestLog.ID,
+		OrgID:             input.OrgID,
+		APIKeyID:          uuidPtr(input.APIKeyID),
+		ProviderID:        uuidPtr(input.ProviderID),
+		ModelID:           uuidPtr(input.ModelID),
+		Status:            result.RequestLog.Status,
+		PromptTokens:      int64(result.UsageRecord.PromptTokens),
+		CompletionTokens:  int64(result.UsageRecord.CompletionTokens),
+		TotalTokens:       int64(result.UsageRecord.TotalTokens),
+		TotalCostMicroUSD: result.CostRecord.TotalCostMicro,
+		LatencyMS:         result.RequestLog.LatencyMs,
+		CreatedAt:         result.RequestLog.CompletedAt,
+	})
 	return result, nil
 }
 
@@ -294,6 +319,20 @@ func (s *Service) RecordFailure(ctx context.Context, input RecordFailureInput) (
 			CreatedAt:         requestLog.CompletedAt,
 		})
 	}
+	s.writeAnalyticsRecord(ctx, analytics.UsageRecord{
+		RequestID:         requestLog.ID,
+		OrgID:             input.OrgID,
+		APIKeyID:          input.APIKeyID,
+		ProviderID:        input.ProviderID,
+		ModelID:           input.ModelID,
+		Status:            requestLog.Status,
+		PromptTokens:      0,
+		CompletionTokens:  0,
+		TotalTokens:       0,
+		TotalCostMicroUSD: 0,
+		LatencyMS:         requestLog.LatencyMs,
+		CreatedAt:         requestLog.CompletedAt,
+	})
 	return requestLog, nil
 }
 
@@ -313,6 +352,25 @@ func (s *Service) publishUsageEvent(ctx context.Context, event events.UsageEvent
 		}
 		if s.metrics != nil {
 			s.metrics.IncUsageEventPublishFailed()
+		}
+	}
+}
+
+func (s *Service) writeAnalyticsRecord(ctx context.Context, record analytics.UsageRecord) {
+	if s.analytics == nil {
+		return
+	}
+	if err := s.analytics.WriteUsageRecord(ctx, record); err != nil {
+		if s.logger != nil {
+			s.logger.Warn(
+				"write analytics record failed",
+				zap.Error(err),
+				zap.String("request_id", record.RequestID.String()),
+				zap.String("org_id", record.OrgID.String()),
+			)
+		}
+		if s.metrics != nil {
+			s.metrics.IncAnalyticsWriteFailed()
 		}
 	}
 }

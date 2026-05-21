@@ -11,15 +11,16 @@ import (
 type Metrics struct {
 	registry *prometheus.Registry
 
-	requests         *prometheus.CounterVec
-	requestDuration  *prometheus.HistogramVec
-	providerRequests *prometheus.CounterVec
-	providerErrors   *prometheus.CounterVec
-	tokens           *prometheus.CounterVec
-	costMicroUSD     *prometheus.CounterVec
-	rateLimited      prometheus.Counter
-	budgetBlocked    prometheus.Counter
-	eventPublishFail prometheus.Counter
+	requests           *prometheus.CounterVec
+	requestDuration    *prometheus.HistogramVec
+	providerRequests   *prometheus.CounterVec
+	providerErrors     *prometheus.CounterVec
+	tokens             *prometheus.CounterVec
+	costMicroUSD       *prometheus.CounterVec
+	rateLimited        prometheus.Counter
+	budgetBlocked      prometheus.Counter
+	eventPublishFail   prometheus.Counter
+	analyticsWriteFail prometheus.Counter
 }
 
 func NewMetrics() *Metrics {
@@ -62,6 +63,10 @@ func NewMetrics() *Metrics {
 			Name: "llmgw_usage_event_publish_failed_total",
 			Help: "Total failed usage event publish attempts.",
 		}),
+		analyticsWriteFail: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "llmgw_analytics_write_failed_total",
+			Help: "Total failed analytics write attempts.",
+		}),
 	}
 	m.registry.MustRegister(
 		m.requests,
@@ -73,6 +78,7 @@ func NewMetrics() *Metrics {
 		m.rateLimited,
 		m.budgetBlocked,
 		m.eventPublishFail,
+		m.analyticsWriteFail,
 	)
 	m.requests.WithLabelValues("", "", "").Add(0)
 	m.requestDuration.WithLabelValues("", "", "").Observe(0)
@@ -140,4 +146,11 @@ func (m *Metrics) IncUsageEventPublishFailed() {
 		return
 	}
 	m.eventPublishFail.Inc()
+}
+
+func (m *Metrics) IncAnalyticsWriteFailed() {
+	if m == nil {
+		return
+	}
+	m.analyticsWriteFail.Inc()
 }
