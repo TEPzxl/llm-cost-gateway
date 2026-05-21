@@ -122,6 +122,27 @@ type ContentPolicy struct {
 	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
 }
 
+type CostAnomalyPolicy struct {
+	ID                    uuid.UUID   `db:"id" json:"id"`
+	OrgID                 uuid.UUID   `db:"org_id" json:"org_id"`
+	Name                  string      `db:"name" json:"name"`
+	RuleType              string      `db:"rule_type" json:"rule_type"`
+	ScopeType             string      `db:"scope_type" json:"scope_type"`
+	ScopeID               *uuid.UUID  `db:"scope_id" json:"scope_id"`
+	ModelAlias            pgtype.Text `db:"model_alias" json:"model_alias"`
+	ThresholdMicroUsd     pgtype.Int8 `db:"threshold_micro_usd" json:"threshold_micro_usd"`
+	ThresholdBps          pgtype.Int4 `db:"threshold_bps" json:"threshold_bps"`
+	SpikeMultiplierBps    int32       `db:"spike_multiplier_bps" json:"spike_multiplier_bps"`
+	CurrentWindowMinutes  int32       `db:"current_window_minutes" json:"current_window_minutes"`
+	BaselineWindowMinutes int32       `db:"baseline_window_minutes" json:"baseline_window_minutes"`
+	MinRequests           int32       `db:"min_requests" json:"min_requests"`
+	Action                string      `db:"action" json:"action"`
+	FallbackModel         pgtype.Text `db:"fallback_model" json:"fallback_model"`
+	Status                string      `db:"status" json:"status"`
+	CreatedAt             time.Time   `db:"created_at" json:"created_at"`
+	UpdatedAt             time.Time   `db:"updated_at" json:"updated_at"`
+}
+
 type CostRecord struct {
 	ID               uuid.UUID       `db:"id" json:"id"`
 	UsageRecordID    uuid.UUID       `db:"usage_record_id" json:"usage_record_id"`
