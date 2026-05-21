@@ -23,6 +23,7 @@ type ChatStreamResult struct {
 	resolved          routing.ResolveResult
 	budgetCheck       budget.CheckResult
 	quotaCheck        auth.APIKeyQuotaCheckResult
+	contentDecision   contentPolicyDecision
 	startedAt         time.Time
 	providerStartedAt time.Time
 }
@@ -38,6 +39,17 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 		s.metrics.ObserveGatewayRequest("error", "", request.Model, s.clock().Sub(startedAt))
 		return nil, domain.NewError(http.StatusBadRequest, domain.CodeInvalidRequest, "model and messages are required")
 	}
+	var contentDecision contentPolicyDecision
+	request, contentDecision, err := s.applyContentPolicy(ctx, input.Principal.OrgID, request)
+	if err != nil {
+		return nil, err
+	}
+	if contentDecision.Blocked {
+		metadata := contentPolicyMetadata(contentDecision)
+		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusBadRequest, domain.CodeContentPolicyBlocked, "", nil, nil, metadata, startedAt)
+		s.metrics.ObserveGatewayRequest("error", "", request.Model, s.clock().Sub(startedAt))
+		return nil, domain.NewError(http.StatusBadRequest, domain.CodeContentPolicyBlocked, "content policy blocked")
+	}
 	s.recordPromptCacheSkip(ctx, input, request, "stream")
 
 	budgetCheck, err := s.budgets.Check(ctx, input.Principal.OrgID)
@@ -45,7 +57,7 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 		return nil, err
 	}
 	if !budgetCheck.Allowed {
-		metadata := budgetMetadata(budgetCheck)
+		metadata := withContentPolicyMetadata(budgetMetadata(budgetCheck), contentDecision)
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusBudgetBlocked, http.StatusPaymentRequired, domain.CodeBudgetExceeded, "", nil, nil, metadata, startedAt)
 		s.metrics.IncBudgetBlocked()
 		s.metrics.ObserveGatewayRequest("budget_blocked", "", request.Model, s.clock().Sub(startedAt))
@@ -56,7 +68,7 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 		return nil, err
 	}
 	if !quotaCheck.Allowed {
-		metadata := apiKeyQuotaMetadata(quotaCheck)
+		metadata := withContentPolicyMetadata(apiKeyQuotaMetadata(quotaCheck), contentDecision)
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusBudgetBlocked, http.StatusPaymentRequired, domain.CodeAPIKeyQuotaExceeded, "", nil, nil, metadata, startedAt)
 		s.metrics.ObserveGatewayRequest("api_key_quota_blocked", "", request.Model, s.clock().Sub(startedAt))
 		return nil, domain.NewError(http.StatusPaymentRequired, domain.CodeAPIKeyQuotaExceeded, "api key quota exceeded")
@@ -70,7 +82,7 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 	})
 	if err != nil {
 		if errors.Is(err, routing.ErrRouteNotFound) {
-			_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusNotFound, domain.CodeRouteNotFound, "", nil, nil, nil, startedAt)
+			_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusNotFound, domain.CodeRouteNotFound, "", nil, nil, contentPolicyMetadata(contentDecision), startedAt)
 			s.metrics.ObserveGatewayRequest("error", "", request.Model, s.clock().Sub(startedAt))
 			return nil, domain.NewError(http.StatusNotFound, domain.CodeRouteNotFound, "route not found")
 		}
@@ -79,13 +91,15 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 
 	adapter, err := s.registry.AdapterFor(resolved.Provider.Type)
 	if err != nil {
-		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "", &resolved.Provider.ID, &resolved.Model.ID, streamMetadata(budgetCheck, quotaCheck, false), startedAt)
+		metadata := withContentPolicyMetadata(streamMetadata(budgetCheck, quotaCheck, false), contentDecision)
+		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "", &resolved.Provider.ID, &resolved.Model.ID, metadata, startedAt)
 		s.metrics.ObserveGatewayRequest("error", resolved.Provider.Name, request.Model, s.clock().Sub(startedAt))
 		return nil, domain.NewError(http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "provider unavailable")
 	}
 	providerConfig, err := s.providerConfig(ctx, resolved.Provider)
 	if err != nil {
-		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "", &resolved.Provider.ID, &resolved.Model.ID, streamMetadata(budgetCheck, quotaCheck, false), startedAt)
+		metadata := withContentPolicyMetadata(streamMetadata(budgetCheck, quotaCheck, false), contentDecision)
+		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "", &resolved.Provider.ID, &resolved.Model.ID, metadata, startedAt)
 		s.metrics.ObserveGatewayRequest("error", resolved.Provider.Name, request.Model, s.clock().Sub(startedAt))
 		return nil, domain.NewError(http.StatusServiceUnavailable, domain.CodeProviderUnavailable, "provider unavailable")
 	}
@@ -103,7 +117,8 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 	})
 	if err != nil {
 		status, code := providerErrorStatus(err)
-		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, status, code, "", &resolved.Provider.ID, &resolved.Model.ID, streamMetadata(budgetCheck, quotaCheck, false), startedAt)
+		metadata := withContentPolicyMetadata(streamMetadata(budgetCheck, quotaCheck, false), contentDecision)
+		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, status, code, "", &resolved.Provider.ID, &resolved.Model.ID, metadata, startedAt)
 		s.metrics.ObserveProviderRequest(resolved.Provider.Name, request.Model, "error", code)
 		s.metrics.ObserveGatewayRequest("error", resolved.Provider.Name, request.Model, s.clock().Sub(startedAt))
 		return nil, domain.NewError(status, code, "provider request failed")
@@ -116,6 +131,7 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 		resolved:          resolved,
 		budgetCheck:       budgetCheck,
 		quotaCheck:        quotaCheck,
+		contentDecision:   contentDecision,
 		startedAt:         startedAt,
 		providerStartedAt: providerStartedAt,
 	}, nil
@@ -124,7 +140,7 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 func (s *ChatService) FinalizeStream(ctx context.Context, result *ChatStreamResult, usage *contract.StreamUsage, streamErr error) error {
 	providerLatencyMS := int32(s.clock().Sub(result.providerStartedAt).Milliseconds())
 	completedAt := s.clock()
-	metadata := streamMetadata(result.budgetCheck, result.quotaCheck, usage == nil)
+	metadata := withContentPolicyMetadata(streamMetadata(result.budgetCheck, result.quotaCheck, usage == nil), result.contentDecision)
 	if streamErr != nil {
 		status, code := providerErrorStatus(streamErr)
 		err := s.recordFailure(ctx, result.input, result.request.Model, metering.StatusError, status, code, "", &result.resolved.Provider.ID, &result.resolved.Model.ID, metadata, result.startedAt)

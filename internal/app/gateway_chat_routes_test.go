@@ -801,6 +801,136 @@ func TestGatewayChatCompletionsSemanticCacheSkipsHighTemperature(t *testing.T) {
 	assertAppCacheEventCount(t, ctx, st, "semantic_skip", 2)
 }
 
+func TestGatewayChatCompletionsPIIRedactsBeforeProvider(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	createContentPolicyViaHTTP(t, router, apiKey.AdminToken, createContentPolicyRequest{
+		Name:      "redact-pii",
+		PIIAction: "redact",
+	})
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var providerRequest struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&providerRequest); err != nil {
+			t.Fatalf("decode provider request: %v", err)
+		}
+		if len(providerRequest.Messages) != 1 {
+			t.Fatalf("provider messages count = %d, want 1", len(providerRequest.Messages))
+		}
+		content := providerRequest.Messages[0].Content
+		if strings.Contains(content, "alice@example.com") {
+			t.Fatalf("provider request contains raw PII: %q", content)
+		}
+		if !strings.Contains(content, "[REDACTED:email]") {
+			t.Fatalf("provider request content = %q, want redacted email", content)
+		}
+		writeAppOpenAIChatResponse(t, w)
+	}))
+	defer server.Close()
+
+	provider, model := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "pii-redact", server.URL, 100)
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "pii-redact-policy",
+		MatchModel: "pii-redact",
+		Strategy:   "single",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: provider.ID, ModelID: model.ID, Priority: 1, Weight: 100},
+		},
+	})
+
+	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"pii-redact","messages":[{"role":"user","content":"email alice@example.com please"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PII redact chat status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("provider calls = %d, want 1", got)
+	}
+	assertAppTableCount(t, ctx, st, "request_logs", 1)
+	assertAppTableCount(t, ctx, st, "usage_records", 1)
+	assertAppTableCount(t, ctx, st, "cost_records", 1)
+	assertAppRequestLogContentPolicy(t, ctx, st, "redact", "email")
+	assertAppRequestLogMetadataOmits(t, ctx, st, "alice@example.com")
+}
+
+func TestGatewayChatCompletionsPIIBlockWritesRequestLog(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	createContentPolicyViaHTTP(t, router, apiKey.AdminToken, createContentPolicyRequest{
+		Name:      "block-pii",
+		PIIAction: "block",
+	})
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		writeAppOpenAIChatResponse(t, w)
+	}))
+	defer server.Close()
+
+	provider, model := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "pii-block", server.URL, 100)
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "pii-block-policy",
+		MatchModel: "pii-block",
+		Strategy:   "single",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: provider.ID, ModelID: model.ID, Priority: 1, Weight: 100},
+		},
+	})
+
+	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"pii-block","messages":[{"role":"user","content":"email bob@example.com please"}]}`)
+	assertGatewayError(t, rec, http.StatusBadRequest, "content_policy_blocked")
+
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("provider calls = %d, want 0", got)
+	}
+	assertAppTableCount(t, ctx, st, "request_logs", 1)
+	assertAppTableCount(t, ctx, st, "usage_records", 0)
+	assertAppTableCount(t, ctx, st, "cost_records", 0)
+	assertAppRequestLogStatus(t, ctx, st, "error")
+	assertAppRequestLogErrorCode(t, ctx, st, "content_policy_blocked")
+	assertAppRequestLogContentPolicy(t, ctx, st, "block", "email")
+	assertAppRequestLogMetadataOmits(t, ctx, st, "bob@example.com")
+}
+
+func TestGatewayChatCompletionsStreamPIIBlockSkipsProvider(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	createContentPolicyViaHTTP(t, router, apiKey.AdminToken, createContentPolicyRequest{
+		Name:      "block-stream-pii",
+		PIIAction: "block",
+	})
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		writeAppOpenAIChatResponse(t, w)
+	}))
+	defer server.Close()
+
+	provider, model := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "pii-stream-block", server.URL, 100)
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "pii-stream-block-policy",
+		MatchModel: "pii-stream-block",
+		Strategy:   "single",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: provider.ID, ModelID: model.ID, Priority: 1, Weight: 100},
+		},
+	})
+
+	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"pii-stream-block","messages":[{"role":"user","content":"call 415-555-1212"}],"stream":true}`)
+	assertGatewayError(t, rec, http.StatusBadRequest, "content_policy_blocked")
+
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("provider calls = %d, want 0", got)
+	}
+	assertAppTableCount(t, ctx, st, "request_logs", 1)
+	assertAppRequestLogContentPolicy(t, ctx, st, "block", "phone")
+	assertAppRequestLogMetadataOmits(t, ctx, st, "415-555-1212")
+}
+
 type fakeGatewayLimiter struct {
 	decision ratelimit.Decision
 	err      error
@@ -1088,6 +1218,45 @@ func assertAppRequestLogAPIKeyQuota(t *testing.T, ctx context.Context, st *store
 	}
 }
 
+func assertAppRequestLogContentPolicy(t *testing.T, ctx context.Context, st *store.Store, wantAction string, wantType string) {
+	t.Helper()
+
+	var action string
+	var policyHit bool
+	var hasType bool
+	if err := st.Pool.QueryRow(ctx, `
+		SELECT
+			metadata->'content_policy'->>'action',
+			(metadata->'content_policy'->>'policy_hit')::boolean,
+			metadata->'content_policy'->'types' ? $1
+		FROM request_logs
+		ORDER BY started_at DESC
+		LIMIT 1
+	`, wantType).Scan(&action, &policyHit, &hasType); err != nil {
+		t.Fatalf("select latest request log content_policy metadata: %v", err)
+	}
+	if action != wantAction || !policyHit || !hasType {
+		t.Fatalf("content_policy metadata = action:%q policy_hit:%t has_type:%t, want action:%q hit:true type:%q",
+			action, policyHit, hasType, wantAction, wantType)
+	}
+}
+
+func assertAppRequestLogMetadataOmits(t *testing.T, ctx context.Context, st *store.Store, raw string) {
+	t.Helper()
+
+	var count int
+	if err := st.Pool.QueryRow(ctx, `
+		SELECT count(*)::int
+		FROM request_logs
+		WHERE COALESCE(metadata::text, '') LIKE '%' || $1 || '%'
+	`, raw).Scan(&count); err != nil {
+		t.Fatalf("search request log metadata for raw content: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("request log metadata contains raw content %q", raw)
+	}
+}
+
 func assertAppCacheEventCount(t *testing.T, ctx context.Context, st *store.Store, eventType string, want int) {
 	t.Helper()
 
@@ -1149,6 +1318,64 @@ func assertCacheEventsRouteListsEvents(t *testing.T, router http.Handler, adminT
 	if strings.Contains(rec.Body.String(), "cache me") {
 		t.Fatal("cache events response contains prompt text")
 	}
+}
+
+type createContentPolicyRequest struct {
+	Name      string `json:"name"`
+	PIIAction string `json:"pii_action"`
+}
+
+type contentPolicyResponse struct {
+	ID        uuid.UUID `json:"id"`
+	Name      string    `json:"name"`
+	PIIAction string    `json:"pii_action"`
+	Status    string    `json:"status"`
+}
+
+type listContentPoliciesResponse struct {
+	Items []contentPolicyResponse `json:"items"`
+}
+
+func createContentPolicyViaHTTP(t *testing.T, router http.Handler, adminToken string, body createContentPolicyRequest) contentPolicyResponse {
+	t.Helper()
+
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal create content policy request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/content-policies", strings.NewReader(string(payload)))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /api/v1/admin/content-policies status = %d, want %d; body=%s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var response contentPolicyResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode create content policy response: %v", err)
+	}
+	if response.ID == uuid.Nil || response.Name != body.Name || response.PIIAction != body.PIIAction || response.Status != "active" {
+		t.Fatalf("content policy response = %+v, want name=%q pii_action=%q active", response, body.Name, body.PIIAction)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/content-policies", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/admin/content-policies status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var listResponse listContentPoliciesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listResponse); err != nil {
+		t.Fatalf("decode list content policies response: %v", err)
+	}
+	if len(listResponse.Items) != 1 || listResponse.Items[0].ID != response.ID {
+		t.Fatalf("content policy list = %+v, want created policy %s", listResponse.Items, response.ID)
+	}
+	return response
 }
 
 func assertAppBudgetAlertDeliveryCount(t *testing.T, ctx context.Context, st *store.Store, want int) {

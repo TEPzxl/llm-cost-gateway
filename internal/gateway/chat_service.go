@@ -25,6 +25,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/events"
 	"github.com/tep/llm-cost-gateway/internal/metering"
 	"github.com/tep/llm-cost-gateway/internal/observability"
+	contentpolicy "github.com/tep/llm-cost-gateway/internal/policy"
 	"github.com/tep/llm-cost-gateway/internal/provider"
 	contract "github.com/tep/llm-cost-gateway/internal/provider/contract"
 	"github.com/tep/llm-cost-gateway/internal/routing"
@@ -40,6 +41,8 @@ type ChatService struct {
 	budgets             *budget.Service
 	alerts              *budget.AlertService
 	apiKeyQuotas        *auth.APIKeyQuotaService
+	contentPolicies     *contentpolicy.Service
+	piiDetector         *contentpolicy.Detector
 	metering            *metering.Service
 	metrics             *observability.Metrics
 	retryPolicy         RetryPolicy
@@ -178,6 +181,13 @@ type semanticCacheCandidate struct {
 	embedding    []float64
 }
 
+type contentPolicyDecision struct {
+	Action  string
+	Hit     bool
+	Blocked bool
+	Types   []string
+}
+
 func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observability.Metrics, retryPolicy RetryPolicy, opts ...ChatServiceOption) *ChatService {
 	service := &ChatService{
 		store:               st,
@@ -186,6 +196,8 @@ func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observ
 		budgets:             budget.NewService(st.Queries),
 		alerts:              budget.NewAlertService(st),
 		apiKeyQuotas:        auth.NewAPIKeyQuotaService(st.Queries),
+		contentPolicies:     contentpolicy.NewService(st),
+		piiDetector:         contentpolicy.NewDetector(),
 		metering:            metering.NewService(st, costing.NewCalculator()),
 		metrics:             metrics,
 		retryPolicy:         retryPolicy.Normalize(),
@@ -227,13 +239,24 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 		s.metrics.ObserveGatewayRequest("error", "", request.Model, s.clock().Sub(startedAt))
 		return ChatResult{}, domain.NewError(http.StatusBadRequest, domain.CodeInvalidRequest, "model and messages are required")
 	}
+	var contentDecision contentPolicyDecision
+	request, contentDecision, err := s.applyContentPolicy(ctx, input.Principal.OrgID, request)
+	if err != nil {
+		return ChatResult{}, err
+	}
+	if contentDecision.Blocked {
+		metadata := contentPolicyMetadata(contentDecision)
+		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusBadRequest, domain.CodeContentPolicyBlocked, "", nil, nil, metadata, startedAt)
+		s.metrics.ObserveGatewayRequest("error", "", request.Model, s.clock().Sub(startedAt))
+		return ChatResult{}, domain.NewError(http.StatusBadRequest, domain.CodeContentPolicyBlocked, "content policy blocked")
+	}
 
 	budgetCheck, err := s.budgets.Check(ctx, input.Principal.OrgID)
 	if err != nil {
 		return ChatResult{}, err
 	}
 	if !budgetCheck.Allowed {
-		metadata := budgetMetadata(budgetCheck)
+		metadata := withContentPolicyMetadata(budgetMetadata(budgetCheck), contentDecision)
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusBudgetBlocked, http.StatusPaymentRequired, domain.CodeBudgetExceeded, "", nil, nil, metadata, startedAt)
 		s.metrics.IncBudgetBlocked()
 		s.metrics.ObserveGatewayRequest("budget_blocked", "", request.Model, s.clock().Sub(startedAt))
@@ -244,7 +267,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 		return ChatResult{}, err
 	}
 	if !quotaCheck.Allowed {
-		metadata := apiKeyQuotaMetadata(quotaCheck)
+		metadata := withContentPolicyMetadata(apiKeyQuotaMetadata(quotaCheck), contentDecision)
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusBudgetBlocked, http.StatusPaymentRequired, domain.CodeAPIKeyQuotaExceeded, "", nil, nil, metadata, startedAt)
 		s.metrics.ObserveGatewayRequest("api_key_quota_blocked", "", request.Model, s.clock().Sub(startedAt))
 		return ChatResult{}, domain.NewError(http.StatusPaymentRequired, domain.CodeAPIKeyQuotaExceeded, "api key quota exceeded")
@@ -258,7 +281,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	})
 	if err != nil {
 		if errors.Is(err, routing.ErrRouteNotFound) {
-			_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusNotFound, domain.CodeRouteNotFound, "", nil, nil, nil, startedAt)
+			_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, http.StatusNotFound, domain.CodeRouteNotFound, "", nil, nil, contentPolicyMetadata(contentDecision), startedAt)
 			s.metrics.ObserveGatewayRequest("error", "", request.Model, s.clock().Sub(startedAt))
 			return ChatResult{}, domain.NewError(http.StatusNotFound, domain.CodeRouteNotFound, "route not found")
 		}
@@ -269,7 +292,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	cacheKey, cacheable := s.promptCacheKey(request, input.Principal.OrgID)
 	if cacheable {
 		if cached, err := s.promptCache.Get(ctx, cacheKey); err == nil {
-			return s.respondFromPromptCache(ctx, input, request, resolved, cached, cacheKey, budgetCheck, quotaCheck, startedAt)
+			return s.respondFromPromptCache(ctx, input, request, resolved, cached, cacheKey, budgetCheck, quotaCheck, contentDecision, startedAt)
 		} else if errors.Is(err, promptcache.ErrCacheMiss) {
 			s.recordCacheEvent(ctx, cacheEventInput{
 				OrgID:          input.Principal.OrgID,
@@ -296,7 +319,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 			Embedding:      semanticCandidate.embedding,
 			Threshold:      s.semanticThreshold,
 		}); err == nil {
-			return s.respondFromSemanticCache(ctx, input, request, resolved, match, budgetCheck, quotaCheck, startedAt)
+			return s.respondFromSemanticCache(ctx, input, request, resolved, match, budgetCheck, quotaCheck, contentDecision, startedAt)
 		} else if errors.Is(err, promptcache.ErrSemanticCacheMiss) {
 			s.recordSemanticCacheEvent(ctx, input.Principal.OrgID, nil, "semantic_miss", request.Model, semanticCandidate.cacheKeyHash, semanticCandidate.messagesHash, "")
 		} else {
@@ -376,7 +399,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 			lastStatus = http.StatusServiceUnavailable
 			lastCode = domain.CodeProviderUnavailable
 		}
-		metadata := chatMetadata(budgetCheck, quotaCheck, attempts, includeFallbackMetadata, includeFallbackMetadata || hasRetriedTarget(attempts))
+		metadata := withContentPolicyMetadata(chatMetadata(budgetCheck, quotaCheck, attempts, includeFallbackMetadata, includeFallbackMetadata || hasRetriedTarget(attempts)), contentDecision)
 		_ = s.recordFailure(ctx, input, request.Model, metering.StatusError, lastStatus, lastCode, "", &selected.Provider.ID, &selected.Model.ID, metadata, startedAt)
 		s.metrics.ObserveGatewayRequest("error", selected.Provider.Name, request.Model, s.clock().Sub(startedAt))
 		return ChatResult{}, domain.NewError(lastStatus, lastCode, "provider request failed")
@@ -387,7 +410,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	if providerLatencyMS == 0 {
 		providerLatencyMS = int32(s.clock().Sub(providerStarted).Milliseconds())
 	}
-	metadata := chatMetadata(budgetCheck, quotaCheck, attempts, includeFallbackMetadata, includeFallbackMetadata || hasRetriedTarget(attempts))
+	metadata := withContentPolicyMetadata(chatMetadata(budgetCheck, quotaCheck, attempts, includeFallbackMetadata, includeFallbackMetadata || hasRetriedTarget(attempts)), contentDecision)
 	successStatus := metering.StatusSuccess
 	if budgetCheck.Warning {
 		successStatus = metering.StatusBudgetWarned
@@ -517,13 +540,13 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	return ChatResult{Response: response}, nil
 }
 
-func (s *ChatService) respondFromSemanticCache(ctx context.Context, input ChatInput, request ChatCompletionRequest, resolved routing.ResolveTargetsResult, match promptcache.SemanticMatch, budgetCheck budget.CheckResult, quotaCheck auth.APIKeyQuotaCheckResult, startedAt time.Time) (ChatResult, error) {
+func (s *ChatService) respondFromSemanticCache(ctx context.Context, input ChatInput, request ChatCompletionRequest, resolved routing.ResolveTargetsResult, match promptcache.SemanticMatch, budgetCheck budget.CheckResult, quotaCheck auth.APIKeyQuotaCheckResult, contentDecision contentPolicyDecision, startedAt time.Time) (ChatResult, error) {
 	target := resolved.Targets[0]
 	status := metering.StatusSuccess
 	if budgetCheck.Warning {
 		status = metering.StatusBudgetWarned
 	}
-	metadata := withSemanticCacheMetadata(chatMetadata(budgetCheck, quotaCheck, nil, false, false), "semantic_hit", match.CacheKeyHash, match.Similarity)
+	metadata := withContentPolicyMetadata(withSemanticCacheMetadata(chatMetadata(budgetCheck, quotaCheck, nil, false, false), "semantic_hit", match.CacheKeyHash, match.Similarity), contentDecision)
 	requestLog, err := s.metering.RecordCacheHit(ctx, metering.RecordCacheHitInput{
 		RequestID:     input.RequestID,
 		OrgID:         input.Principal.OrgID,
@@ -555,13 +578,13 @@ func (s *ChatService) respondFromSemanticCache(ctx context.Context, input ChatIn
 	return ChatResult{Response: cachedChatResponse(input.RequestID, request.Model, target, match.Response, s.clock())}, nil
 }
 
-func (s *ChatService) respondFromPromptCache(ctx context.Context, input ChatInput, request ChatCompletionRequest, resolved routing.ResolveTargetsResult, cached promptcache.CachedChatResponse, cacheKey promptcache.PromptKey, budgetCheck budget.CheckResult, quotaCheck auth.APIKeyQuotaCheckResult, startedAt time.Time) (ChatResult, error) {
+func (s *ChatService) respondFromPromptCache(ctx context.Context, input ChatInput, request ChatCompletionRequest, resolved routing.ResolveTargetsResult, cached promptcache.CachedChatResponse, cacheKey promptcache.PromptKey, budgetCheck budget.CheckResult, quotaCheck auth.APIKeyQuotaCheckResult, contentDecision contentPolicyDecision, startedAt time.Time) (ChatResult, error) {
 	target := resolved.Targets[0]
 	status := metering.StatusSuccess
 	if budgetCheck.Warning {
 		status = metering.StatusBudgetWarned
 	}
-	metadata := withCacheMetadata(chatMetadata(budgetCheck, quotaCheck, nil, false, false), "hit", cacheKey.CacheKeyHash)
+	metadata := withContentPolicyMetadata(withCacheMetadata(chatMetadata(budgetCheck, quotaCheck, nil, false, false), "hit", cacheKey.CacheKeyHash), contentDecision)
 	requestLog, err := s.metering.RecordCacheHit(ctx, metering.RecordCacheHitInput{
 		RequestID:     input.RequestID,
 		OrgID:         input.Principal.OrgID,
@@ -688,6 +711,36 @@ func (s *ChatService) semanticCacheCandidate(ctx context.Context, input ChatInpu
 	candidate.enabled = true
 	candidate.embedding = vector
 	return candidate
+}
+
+func (s *ChatService) applyContentPolicy(ctx context.Context, orgID uuid.UUID, request ChatCompletionRequest) (ChatCompletionRequest, contentPolicyDecision, error) {
+	action, err := s.contentPolicies.ActivePIIAction(ctx, orgID)
+	if err != nil {
+		return ChatCompletionRequest{}, contentPolicyDecision{}, err
+	}
+	allHits := make([]contentpolicy.PIIHit, 0)
+	redactedMessages := make([]contract.ChatMessage, len(request.Messages))
+	copy(redactedMessages, request.Messages)
+	for index, message := range request.Messages {
+		hits := s.piiDetector.Detect(message.Content)
+		if len(hits) == 0 {
+			continue
+		}
+		allHits = append(allHits, hits...)
+		if action == contentpolicy.ActionRedact {
+			redactedMessages[index].Content = contentpolicy.Redact(message.Content, hits)
+		}
+	}
+	decision := contentPolicyDecision{
+		Action:  action,
+		Hit:     len(allHits) > 0,
+		Blocked: len(allHits) > 0 && action == contentpolicy.ActionBlock,
+		Types:   contentpolicy.HitTypes(allHits),
+	}
+	if decision.Hit && action == contentpolicy.ActionRedact {
+		request.Messages = redactedMessages
+	}
+	return request, decision, nil
 }
 
 func (s *ChatService) recordPromptCacheSkip(ctx context.Context, input ChatInput, request ChatCompletionRequest, reason string) {
@@ -1009,6 +1062,31 @@ func withSemanticCacheMetadata(existing *json.RawMessage, status string, cacheKe
 	}
 	raw := json.RawMessage(rawBody)
 	return &raw
+}
+
+func withContentPolicyMetadata(existing *json.RawMessage, decision contentPolicyDecision) *json.RawMessage {
+	if !decision.Hit {
+		return existing
+	}
+	body := map[string]any{}
+	if existing != nil && len(*existing) > 0 {
+		_ = json.Unmarshal(*existing, &body)
+	}
+	body["content_policy"] = map[string]any{
+		"policy_hit": true,
+		"action":     decision.Action,
+		"types":      decision.Types,
+	}
+	rawBody, err := json.Marshal(body)
+	if err != nil {
+		return existing
+	}
+	raw := json.RawMessage(rawBody)
+	return &raw
+}
+
+func contentPolicyMetadata(decision contentPolicyDecision) *json.RawMessage {
+	return withContentPolicyMetadata(nil, decision)
 }
 
 func budgetMetadata(result budget.CheckResult) *json.RawMessage {

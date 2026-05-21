@@ -18,6 +18,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/http/middleware"
 	"github.com/tep/llm-cost-gateway/internal/metering"
 	"github.com/tep/llm-cost-gateway/internal/observability"
+	"github.com/tep/llm-cost-gateway/internal/policy"
 	"github.com/tep/llm-cost-gateway/internal/provider"
 	"github.com/tep/llm-cost-gateway/internal/routing"
 	"github.com/tep/llm-cost-gateway/internal/store"
@@ -127,6 +128,7 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	budgetService := budget.NewService(cfg.Store.Queries)
 	budgetAlertService := budget.NewAlertService(cfg.Store)
 	auditService := audit.NewAdminAuditService(cfg.Store.Queries)
+	contentPolicyService := policy.NewService(cfg.Store)
 	meHandler := admin.NewMeHandler(cfg.Store.Queries)
 	apiKeyHandler := admin.NewAPIKeyHandler(apiKeyService)
 	providerHandler := admin.NewProviderHandler(providerService)
@@ -136,6 +138,7 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	budgetHandler := admin.NewBudgetHandler(budgetService)
 	budgetAlertHandler := admin.NewBudgetAlertHandler(budgetAlertService)
 	auditHandler := admin.NewAuditHandler(auditService)
+	contentPolicyHandler := admin.NewContentPolicyHandler(contentPolicyService)
 	cacheEventHandler := admin.NewCacheEventHandler(cfg.Store.Queries)
 	requestLogHandler := admin.NewRequestLogHandler(cfg.Store.Queries)
 	usageHandler := admin.NewUsageHandler(cfg.Store.Queries)
@@ -165,6 +168,8 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	group.GET("/budget-alerts", budgetAlertHandler.List)
 	group.GET("/budget-alert-deliveries", budgetAlertHandler.ListDeliveries)
 	group.GET("/audit-logs", auditHandler.List)
+	group.POST("/content-policies", contentPolicyHandler.Create)
+	group.GET("/content-policies", contentPolicyHandler.List)
 	group.GET("/cache-events", cacheEventHandler.List)
 	group.GET("/request-logs", requestLogHandler.List)
 	group.GET("/usage/summary", usageHandler.Summary)
