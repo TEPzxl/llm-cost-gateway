@@ -22,16 +22,16 @@ export function AuditLogsPage({ client }: PageProps) {
     <div className="page-grid">
       {error && <div className="alert error">{error}</div>}
       <section className="panel">
-        <h2>Audit Logs</h2>
+        <h2>审计日志</h2>
         <DataTable
           items={items}
-          empty="No audit logs yet."
+          empty="暂无审计日志。"
           columns={[
-            { key: "action", header: "Action", render: (item) => item.action },
-            { key: "resource", header: "Resource", render: (item) => resourceLabel(item) },
-            { key: "actor", header: "Actor Token", render: (item) => item.actor_admin_token_id },
-            { key: "request", header: "Request", render: (item) => item.request_id },
-            { key: "created", header: "Created", render: (item) => formatDate(item.created_at) }
+            { key: "action", header: "动作", render: (item) => item.action },
+            { key: "resource", header: "资源", render: (item) => resourceLabel(item) },
+            { key: "actor", header: "操作令牌", render: (item) => item.actor_admin_token_id },
+            { key: "request", header: "请求 ID", render: (item) => item.request_id },
+            { key: "created", header: "创建时间", render: (item) => formatDate(item.created_at) }
           ]}
         />
       </section>

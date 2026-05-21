@@ -25,7 +25,7 @@ export function PoliciesPage({ client }: PageProps) {
     const form = preventDefault(event);
     const name = formValue(form, "name");
     if (!name) {
-      setError("Name is required.");
+      setError("名称不能为空。");
       return;
     }
     setError("");
@@ -41,46 +41,69 @@ export function PoliciesPage({ client }: PageProps) {
   return (
     <div className="page-grid">
       <section className="panel">
-        <h2>Create Content Policy</h2>
+        <h2>创建内容策略</h2>
         <form className="form-grid" onSubmit={handleCreate}>
           <label className="field">
-            <span>Name</span>
+            <span>名称</span>
             <input className="input" name="name" placeholder="redact-pii" />
           </label>
           <label className="field">
-            <span>PII Action</span>
+            <span>PII 动作</span>
             <select
               className="select"
               name="pii_action"
               value={piiAction}
               onChange={(event) => setPIIAction(event.target.value as PIIAction)}
             >
-              <option value="allow">allow</option>
-              <option value="redact">redact</option>
-              <option value="block">block</option>
+              <option value="allow">允许</option>
+              <option value="redact">脱敏</option>
+              <option value="block">阻断</option>
             </select>
           </label>
           <div className="form-actions">
             <button className="button" type="submit">
-              Create policy
+              创建策略
             </button>
           </div>
         </form>
         {error && <div className="alert error">{error}</div>}
       </section>
       <section className="panel">
-        <h2>Content Policies</h2>
+        <h2>内容策略</h2>
         <DataTable
           items={policies}
-          empty="No content policies yet."
+          empty="暂无内容策略。"
           columns={[
-            { key: "name", header: "Name", render: (item) => item.name },
-            { key: "pii_action", header: "PII Action", render: (item) => item.pii_action },
-            { key: "status", header: "Status", render: (item) => item.status },
-            { key: "created", header: "Created", render: (item) => formatDate(item.created_at) }
+            { key: "name", header: "名称", render: (item) => item.name },
+            { key: "pii_action", header: "PII 动作", render: (item) => piiActionLabel(item.pii_action) },
+            { key: "status", header: "状态", render: (item) => contentPolicyStatusLabel(item.status) },
+            { key: "created", header: "创建时间", render: (item) => formatDate(item.created_at) }
           ]}
         />
       </section>
     </div>
   );
+}
+
+function piiActionLabel(action: string) {
+  if (action === "allow") {
+    return "允许";
+  }
+  if (action === "redact") {
+    return "脱敏";
+  }
+  if (action === "block") {
+    return "阻断";
+  }
+  return action;
+}
+
+function contentPolicyStatusLabel(status: string) {
+  if (status === "active") {
+    return "启用";
+  }
+  if (status === "disabled") {
+    return "停用";
+  }
+  return status;
 }

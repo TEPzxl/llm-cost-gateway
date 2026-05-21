@@ -49,62 +49,81 @@ export function RequestLogsPage({ client }: PageProps) {
   return (
     <div className="page-grid">
       <section className="panel">
-        <h2>Filters</h2>
+        <h2>筛选</h2>
         <form className="form-grid" onSubmit={handleFilter}>
           <label className="field">
-            <span>From</span>
+            <span>开始时间</span>
             <input className="input" name="from" placeholder="2026-05-20T00:00:00Z" />
           </label>
           <label className="field">
-            <span>To</span>
+            <span>结束时间</span>
             <input className="input" name="to" placeholder="2026-05-21T00:00:00Z" />
           </label>
           <label className="field">
-            <span>Status</span>
+            <span>状态</span>
             <select className="select" name="status" defaultValue="">
-              <option value="">Any</option>
-              <option value="success">success</option>
-              <option value="error">error</option>
-              <option value="rate_limited">rate_limited</option>
-              <option value="budget_warned">budget_warned</option>
-              <option value="budget_blocked">budget_blocked</option>
+              <option value="">全部</option>
+              <option value="success">成功</option>
+              <option value="error">错误</option>
+              <option value="rate_limited">速率受限</option>
+              <option value="budget_warned">预算告警</option>
+              <option value="budget_blocked">预算阻断</option>
             </select>
           </label>
           <label className="field">
-            <span>Limit</span>
+            <span>数量</span>
             <input className="input" name="limit" type="number" defaultValue={50} min={1} max={200} />
           </label>
-          <label className="field"><span>Error Code</span><input className="input" name="error_code" /></label>
-          <label className="field"><span>Request Model</span><input className="input" name="request_model" /></label>
-          <label className="field"><span>API Key ID</span><input className="input" name="api_key_id" /></label>
-          <label className="field"><span>Provider ID</span><input className="input" name="provider_id" /></label>
-          <label className="field"><span>Model ID</span><input className="input" name="model_id" /></label>
+          <label className="field"><span>错误码</span><input className="input" name="error_code" /></label>
+          <label className="field"><span>请求模型</span><input className="input" name="request_model" /></label>
+          <label className="field"><span>API 密钥 ID</span><input className="input" name="api_key_id" /></label>
+          <label className="field"><span>供应商 ID</span><input className="input" name="provider_id" /></label>
+          <label className="field"><span>模型 ID</span><input className="input" name="model_id" /></label>
           <div className="form-actions">
-            <button className="button" type="submit">Apply filters</button>
+            <button className="button" type="submit">应用筛选</button>
           </div>
         </form>
         {error && <div className="alert error">{error}</div>}
       </section>
       <section className="panel">
-        <h2>Request Logs</h2>
+        <h2>请求日志</h2>
         <DataTable
           items={items}
-          empty="No request logs in this window."
+          empty="当前窗口暂无请求日志。"
           columns={[
-            { key: "model", header: "Model", render: (item) => item.request_model ?? "-" },
-            { key: "status", header: "Status", render: (item) => item.status },
-            { key: "code", header: "Code", render: (item) => item.status_code },
-            { key: "error", header: "Error", render: (item) => item.error_code ?? "-" },
-            { key: "latency", header: "Latency", render: (item) => `${item.latency_ms}ms` },
-            { key: "started", header: "Started", render: (item) => formatDate(item.started_at) }
+            { key: "model", header: "模型", render: (item) => item.request_model ?? "-" },
+            { key: "status", header: "状态", render: (item) => requestLogStatusLabel(item.status) },
+            { key: "code", header: "状态码", render: (item) => item.status_code },
+            { key: "error", header: "错误", render: (item) => item.error_code ?? "-" },
+            { key: "latency", header: "延迟", render: (item) => `${item.latency_ms}ms` },
+            { key: "started", header: "开始时间", render: (item) => formatDate(item.started_at) }
           ]}
         />
         <div className="form-actions">
           <button className="button-secondary" type="button" disabled={!nextCursor} onClick={loadNextPage}>
-            Next page
+            下一页
           </button>
         </div>
       </section>
     </div>
   );
+}
+
+function requestLogStatusLabel(status: string) {
+  if (status === "success") {
+    return "成功";
+  }
+  if (status === "error") {
+    return "错误";
+  }
+  if (status === "rate_limited") {
+    return "速率受限";
+  }
+  if (status === "budget_warned") {
+    return "预算告警";
+  }
+  if (status === "budget_blocked") {
+    return "预算阻断";
+  }
+  return status;
 }

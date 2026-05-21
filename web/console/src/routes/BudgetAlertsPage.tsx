@@ -41,7 +41,7 @@ export function BudgetAlertsPage({ client }: PageProps) {
     const webhookSecret = formValue(form, "webhook_secret");
     const status = formValue(form, "status") as "active" | "disabled";
     if (!budgetID || !webhookURL) {
-      setError("Budget and webhook URL are required.");
+      setError("预算和 Webhook 地址不能为空。");
       return;
     }
     setError("");
@@ -58,70 +58,90 @@ export function BudgetAlertsPage({ client }: PageProps) {
   return (
     <div className="page-grid">
       <section className="panel">
-        <h2>Create Budget Alert</h2>
+        <h2>创建预算告警</h2>
         <form className="form-grid" onSubmit={handleCreate}>
           <label className="field">
-            <span>Budget</span>
+            <span>预算</span>
             <select className="select" name="budget_id" defaultValue="">
-              <option value="" disabled>Select budget</option>
+              <option value="" disabled>请选择预算</option>
               {budgets.map((budget) => (
                 <option key={budget.id} value={budget.id}>{budget.name}</option>
               ))}
             </select>
           </label>
           <label className="field">
-            <span>Status</span>
+            <span>状态</span>
             <select className="select" name="status" defaultValue="active">
-              <option value="active">active</option>
-              <option value="disabled">disabled</option>
+              <option value="active">启用</option>
+              <option value="disabled">停用</option>
             </select>
           </label>
           <label className="field span-2">
-            <span>Webhook URL</span>
+            <span>Webhook 地址</span>
             <input className="input" name="webhook_url" placeholder="https://example.com/budget-alert" />
           </label>
           <label className="field span-2">
-            <span>Webhook Secret</span>
+            <span>Webhook 密钥</span>
             <input className="input" name="webhook_secret" type="password" autoComplete="off" />
           </label>
           <div className="form-actions">
-            <button className="button" type="submit">Create alert</button>
+            <button className="button" type="submit">创建告警</button>
           </div>
         </form>
         {error && <div className="alert error">{error}</div>}
       </section>
 
       <section className="panel">
-        <h2>Budget Alerts</h2>
+        <h2>预算告警</h2>
         <DataTable
           items={alerts}
-          empty="No budget alerts yet."
+          empty="暂无预算告警。"
           columns={[
-            { key: "budget", header: "Budget", render: (item) => budgetNames.get(item.budget_id) ?? item.budget_id },
-            { key: "url", header: "Webhook URL", render: (item) => item.webhook_url },
-            { key: "status", header: "Status", render: (item) => item.status },
-            { key: "created", header: "Created", render: (item) => formatDate(item.created_at) }
+            { key: "budget", header: "预算", render: (item) => budgetNames.get(item.budget_id) ?? item.budget_id },
+            { key: "url", header: "Webhook 地址", render: (item) => item.webhook_url },
+            { key: "status", header: "状态", render: (item) => budgetAlertStatusLabel(item.status) },
+            { key: "created", header: "创建时间", render: (item) => formatDate(item.created_at) }
           ]}
         />
       </section>
 
       <section className="panel">
-        <h2>Deliveries</h2>
+        <h2>告警发送记录</h2>
         <DataTable
           items={deliveries}
-          empty="No alert deliveries yet."
+          empty="暂无告警发送记录。"
           columns={[
-            { key: "budget", header: "Budget", render: (item) => budgetNames.get(item.budget_id) ?? item.budget_id },
-            { key: "threshold", header: "Threshold", render: (item) => `${item.threshold}%` },
-            { key: "used", header: "Used", render: (item) => formatMicroUSD(item.used_micro_usd) },
-            { key: "limit", header: "Limit", render: (item) => formatMicroUSD(item.limit_micro_usd) },
-            { key: "status", header: "Status", render: (item) => item.status },
+            { key: "budget", header: "预算", render: (item) => budgetNames.get(item.budget_id) ?? item.budget_id },
+            { key: "threshold", header: "阈值", render: (item) => `${item.threshold}%` },
+            { key: "used", header: "已用", render: (item) => formatMicroUSD(item.used_micro_usd) },
+            { key: "limit", header: "限额", render: (item) => formatMicroUSD(item.limit_micro_usd) },
+            { key: "status", header: "状态", render: (item) => budgetAlertDeliveryStatusLabel(item.status) },
             { key: "http", header: "HTTP", render: (item) => item.http_status ?? "-" },
-            { key: "error", header: "Error", render: (item) => item.error_message ?? "-" },
-            { key: "created", header: "Created", render: (item) => formatDate(item.created_at) }
+            { key: "error", header: "错误", render: (item) => item.error_message ?? "-" },
+            { key: "created", header: "创建时间", render: (item) => formatDate(item.created_at) }
           ]}
         />
       </section>
     </div>
   );
+}
+
+function budgetAlertStatusLabel(status: string) {
+  if (status === "active") {
+    return "启用";
+  }
+  if (status === "disabled") {
+    return "停用";
+  }
+  return status;
+}
+
+function budgetAlertDeliveryStatusLabel(status: string) {
+  if (status === "success") {
+    return "成功";
+  }
+  if (status === "failed") {
+    return "失败";
+  }
+  return status;
 }

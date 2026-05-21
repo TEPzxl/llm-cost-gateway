@@ -49,27 +49,27 @@ export function AnomalyPoliciesPage({ client }: PageProps) {
     const baselineWindowMinutes = numberValue(form, "baseline_window_minutes", 1440);
     const minRequests = numberValue(form, "min_requests", 1);
     if (!name) {
-      setError("Name is required.");
+      setError("名称不能为空。");
       return;
     }
     if (ruleType === "daily_cost" && thresholdMicro === null) {
-      setError("Daily cost policies need a cost threshold.");
+      setError("每日成本策略需要设置成本阈值。");
       return;
     }
     if (ruleType === "error_rate_spike" && thresholdBPS === null) {
-      setError("Error-rate policies need a bps threshold.");
+      setError("错误率策略需要设置 bps 阈值。");
       return;
     }
     if (scopeType === "api_key" && !scopeID) {
-      setError("API key scope needs an API key ID.");
+      setError("API Key 作用域需要填写 API Key ID。");
       return;
     }
     if (scopeType === "model" && !modelAlias) {
-      setError("Model scope needs a model alias.");
+      setError("模型作用域需要模型别名。");
       return;
     }
     if (action === "downgrade" && !fallbackModel) {
-      setError("Downgrade action needs a fallback model.");
+      setError("降级动作需要设置回退模型。");
       return;
     }
 
@@ -98,76 +98,76 @@ export function AnomalyPoliciesPage({ client }: PageProps) {
   return (
     <div className="page-grid">
       <section className="panel">
-        <h2>Create Anomaly Policy</h2>
+        <h2>创建异常策略</h2>
         <form className="form-grid" onSubmit={handleCreate}>
           <label className="field">
-            <span>Name</span>
-            <input className="input" name="name" placeholder="daily spend guard" />
+            <span>名称</span>
+            <input className="input" name="name" placeholder="日常支出告警策略" />
           </label>
           <label className="field">
-            <span>Rule</span>
+            <span>规则</span>
             <select className="input" value={ruleType} onChange={(event) => updateRule(event.target.value as RuleType)}>
-              <option value="daily_cost">Daily cost</option>
-              <option value="api_key_cost_spike">API key cost spike</option>
-              <option value="model_cost_spike">Model cost spike</option>
-              <option value="error_rate_spike">Error-rate spike</option>
+              <option value="daily_cost">每日成本</option>
+              <option value="api_key_cost_spike">API 密钥成本飙升</option>
+              <option value="model_cost_spike">模型成本飙升</option>
+              <option value="error_rate_spike">错误率飙升</option>
             </select>
           </label>
           <label className="field">
-            <span>Scope</span>
+            <span>作用域</span>
             <select className="input" value={scopeType} onChange={(event) => setScopeType(event.target.value as ScopeType)}>
-              <option value="org">Org</option>
-              <option value="api_key">API key</option>
-              <option value="model">Model alias</option>
+              <option value="org">组织</option>
+              <option value="api_key">API 密钥</option>
+              <option value="model">模型别名</option>
             </select>
           </label>
           <label className="field">
-            <span>API key ID</span>
+            <span>API 密钥 ID</span>
             <input className="input" name="scope_id" disabled={scopeType !== "api_key"} />
           </label>
           <label className="field">
-            <span>Model alias</span>
+            <span>模型别名</span>
             <input className="input" name="model_alias" disabled={scopeType !== "model"} placeholder="fast-chat" />
           </label>
           <label className="field">
-            <span>Cost threshold</span>
+            <span>成本阈值</span>
             <input className="input" name="threshold_micro_usd" min="0" type="number" placeholder="1000000" />
           </label>
           <label className="field">
-            <span>Error threshold bps</span>
+            <span>错误阈值（bps）</span>
             <input className="input" name="threshold_bps" min="1" type="number" placeholder="3000" />
           </label>
           <label className="field">
-            <span>Spike multiplier bps</span>
+            <span>突增倍数（bps）</span>
             <input className="input" name="spike_multiplier_bps" min="1" type="number" defaultValue={20000} />
           </label>
           <label className="field">
-            <span>Current window</span>
+            <span>当前窗口（分钟）</span>
             <input className="input" name="current_window_minutes" min="1" type="number" defaultValue={60} />
           </label>
           <label className="field">
-            <span>Baseline window</span>
+            <span>基线窗口（分钟）</span>
             <input className="input" name="baseline_window_minutes" min="1" type="number" defaultValue={1440} />
           </label>
           <label className="field">
-            <span>Min requests</span>
+            <span>最小请求数</span>
             <input className="input" name="min_requests" min="1" type="number" defaultValue={1} />
           </label>
           <label className="field">
-            <span>Action</span>
+            <span>动作</span>
             <select className="input" value={action} onChange={(event) => setAction(event.target.value as ActionType)}>
-              <option value="notify">Notify</option>
-              <option value="downgrade">Downgrade</option>
-              <option value="block">Block</option>
+              <option value="notify">通知</option>
+              <option value="downgrade">降级</option>
+              <option value="block">阻断</option>
             </select>
           </label>
           <label className="field">
-            <span>Fallback model</span>
+            <span>回退模型</span>
             <input className="input" name="fallback_model" disabled={action !== "downgrade"} placeholder="cheap-chat" />
           </label>
           <div className="form-actions span-2">
             <button className="button" type="submit">
-              Create policy
+              创建策略
             </button>
           </div>
         </form>
@@ -175,18 +175,18 @@ export function AnomalyPoliciesPage({ client }: PageProps) {
       </section>
 
       <section className="panel">
-        <h2>Anomaly Policies</h2>
+        <h2>异常策略</h2>
         <DataTable
           items={items}
-          empty="No anomaly policies yet."
+          empty="暂无异常策略。"
           columns={[
-            { key: "name", header: "Name", render: (item) => item.name },
-            { key: "rule", header: "Rule", render: (item) => ruleLabel(item.rule_type) },
-            { key: "scope", header: "Scope", render: (item) => scopeLabel(item) },
-            { key: "threshold", header: "Threshold", render: (item) => thresholdLabel(item) },
-            { key: "action", header: "Action", render: (item) => actionLabel(item) },
-            { key: "status", header: "Status", render: (item) => item.status },
-            { key: "created", header: "Created", render: (item) => formatDate(item.created_at) }
+            { key: "name", header: "名称", render: (item) => item.name },
+            { key: "rule", header: "规则", render: (item) => ruleLabel(item.rule_type) },
+            { key: "scope", header: "作用域", render: (item) => scopeLabel(item) },
+            { key: "threshold", header: "阈值", render: (item) => thresholdLabel(item) },
+            { key: "action", header: "动作", render: (item) => actionLabel(item) },
+            { key: "status", header: "状态", render: (item) => anomalyPolicyStatusLabel(item.status) },
+            { key: "created", header: "创建时间", render: (item) => formatDate(item.created_at) }
           ]}
         />
       </section>
@@ -204,7 +204,16 @@ function optionalNumberValue(form: HTMLFormElement, name: string) {
 }
 
 function ruleLabel(rule: string) {
-  return rule.replace(/_/g, " ");
+  if (rule === "daily_cost") {
+    return "每日成本";
+  }
+  if (rule === "api_key_cost_spike") {
+    return "API Key 成本飙升";
+  }
+  if (rule === "model_cost_spike") {
+    return "模型成本飙升";
+  }
+  return "错误率飙升";
 }
 
 function scopeLabel(item: AnomalyPolicy) {
@@ -214,7 +223,7 @@ function scopeLabel(item: AnomalyPolicy) {
   if (item.scope_type === "model") {
     return item.model_alias ?? "-";
   }
-  return "org";
+  return "组织";
 }
 
 function thresholdLabel(item: AnomalyPolicy) {
@@ -229,7 +238,23 @@ function thresholdLabel(item: AnomalyPolicy) {
 
 function actionLabel(item: AnomalyPolicy) {
   if (item.action === "downgrade" && item.fallback_model) {
-    return `downgrade -> ${item.fallback_model}`;
+    return `降级 -> ${item.fallback_model}`;
+  }
+  if (item.action === "notify") {
+    return "通知";
+  }
+  if (item.action === "block") {
+    return "阻断";
   }
   return item.action;
+}
+
+function anomalyPolicyStatusLabel(status: string) {
+  if (status === "active") {
+    return "启用";
+  }
+  if (status === "disabled") {
+    return "停用";
+  }
+  return status;
 }

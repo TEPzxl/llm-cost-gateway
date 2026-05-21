@@ -26,20 +26,20 @@ type LayoutProps = {
 };
 
 const navItems: Array<{ id: ConsolePage; label: string }> = [
-  { id: "dashboard", label: "Dashboard" },
-  { id: "members", label: "Members" },
-  { id: "api-keys", label: "API Keys" },
-  { id: "providers", label: "Providers" },
-  { id: "models", label: "Models" },
-  { id: "route-policies", label: "Route Policies" },
-  { id: "anomaly-policies", label: "Anomaly Policies" },
-  { id: "policies", label: "Policies" },
-  { id: "budgets", label: "Budgets" },
-  { id: "budget-alerts", label: "Budget Alerts" },
-  { id: "audit-logs", label: "Audit Logs" },
-  { id: "cache", label: "Cache" },
-  { id: "request-logs", label: "Request Logs" },
-  { id: "usage-summary", label: "Usage Summary" }
+  { id: "dashboard", label: "总览" },
+  { id: "members", label: "成员" },
+  { id: "api-keys", label: "API 密钥" },
+  { id: "providers", label: "供应商" },
+  { id: "models", label: "模型" },
+  { id: "route-policies", label: "路由策略" },
+  { id: "anomaly-policies", label: "异常策略" },
+  { id: "policies", label: "策略" },
+  { id: "budgets", label: "预算" },
+  { id: "budget-alerts", label: "预算告警" },
+  { id: "audit-logs", label: "审计日志" },
+  { id: "cache", label: "缓存" },
+  { id: "request-logs", label: "请求日志" },
+  { id: "usage-summary", label: "使用汇总" }
 ];
 
 export function Layout({
@@ -51,7 +51,7 @@ export function Layout({
 }: LayoutProps) {
   const visibleItems = navItems.filter((item) => canAccessPage(item.id, me));
   const activeLabel =
-    navItems.find((item) => item.id === activePage)?.label ?? "Dashboard";
+    navItems.find((item) => item.id === activePage)?.label ?? "总览";
 
   return (
     <main className="app-shell">
@@ -59,11 +59,11 @@ export function Layout({
         <div className="sidebar-brand">
           <span className="brand-mark">LG</span>
           <div>
-            <div className="brand-title">LLM Cost Gateway</div>
-            <div className="brand-subtitle">Management Console</div>
+            <div className="brand-title">LLM 成本网关</div>
+            <div className="brand-subtitle">管理控制台</div>
           </div>
         </div>
-        <nav className="sidebar-nav" aria-label="Console navigation">
+        <nav className="sidebar-nav" aria-label="控制台导航">
           {visibleItems.map((item) => (
             <button
               key={item.id}
@@ -76,18 +76,18 @@ export function Layout({
           ))}
         </nav>
         <button className="logout-button" type="button" onClick={onLogout}>
-          Log out
+          退出登录
         </button>
       </aside>
       <section className="content-shell">
         <header className="content-header">
           <div>
-            <p className="eyebrow">Tenant Admin</p>
+            <p className="eyebrow">租户管理员</p>
             <h1>{activeLabel}</h1>
           </div>
           {me && (
             <div className="principal-chip">
-              <span>{me.actor_type === "service_token" ? "Service Token" : me.user?.email}</span>
+              <span>{me.actor_type === "service_token" ? "服务令牌" : me.user?.email}</span>
               <strong>{roleLabel(me.role)}</strong>
             </div>
           )}
@@ -120,12 +120,12 @@ export function canAccessPage(page: ConsolePage, me: AdminMe | null) {
 function roleLabel(role: string) {
   switch (role) {
     case "owner":
-      return "Owner";
+      return "拥有者";
     case "admin":
-      return "Admin";
+      return "管理员";
     case "viewer":
-      return "Viewer";
+      return "查看者";
     default:
-      return role || "Owner";
+      return role || "拥有者";
   }
 }

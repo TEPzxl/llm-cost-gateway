@@ -34,60 +34,60 @@ export function CachePage({ client }: PageProps) {
   return (
     <div className="page-grid">
       <section className="panel">
-        <h2>Filters</h2>
+        <h2>筛选</h2>
         <form className="form-grid" onSubmit={handleFilter}>
           <label className="field">
-            <span>From</span>
+            <span>开始时间</span>
             <input className="input" name="from" placeholder="2026-05-20T00:00:00Z" />
           </label>
           <label className="field">
-            <span>To</span>
+            <span>结束时间</span>
             <input className="input" name="to" placeholder="2026-05-21T00:00:00Z" />
           </label>
           <label className="field">
-            <span>Event</span>
+            <span>事件</span>
             <select className="select" name="event_type" defaultValue="">
-              <option value="">Any</option>
-              <option value="hit">hit</option>
-              <option value="miss">miss</option>
-              <option value="store">store</option>
-              <option value="skip">skip</option>
-              <option value="read_error">read_error</option>
-              <option value="write_error">write_error</option>
-              <option value="semantic_hit">semantic_hit</option>
-              <option value="semantic_miss">semantic_miss</option>
-              <option value="semantic_skip">semantic_skip</option>
-              <option value="semantic_store">semantic_store</option>
-              <option value="semantic_read_error">semantic_read_error</option>
-              <option value="semantic_write_error">semantic_write_error</option>
+              <option value="">全部</option>
+              <option value="hit">命中</option>
+              <option value="miss">未命中</option>
+              <option value="store">存储</option>
+              <option value="skip">跳过</option>
+              <option value="read_error">读取失败</option>
+              <option value="write_error">写入失败</option>
+              <option value="semantic_hit">语义命中</option>
+              <option value="semantic_miss">语义未命中</option>
+              <option value="semantic_skip">语义跳过</option>
+              <option value="semantic_store">语义存储</option>
+              <option value="semantic_read_error">语义读取失败</option>
+              <option value="semantic_write_error">语义写入失败</option>
             </select>
           </label>
           <label className="field">
-            <span>Requested Model</span>
+            <span>请求模型</span>
             <input className="input" name="requested_model" />
           </label>
           <label className="field">
-            <span>Limit</span>
+            <span>数量</span>
             <input className="input" name="limit" type="number" defaultValue={50} min={1} max={200} />
           </label>
           <div className="form-actions">
-            <button className="button" type="submit">Apply filters</button>
+            <button className="button" type="submit">应用筛选</button>
           </div>
         </form>
         {error && <div className="alert error">{error}</div>}
       </section>
       <section className="panel">
-        <h2>Cache Events</h2>
+        <h2>缓存事件</h2>
         <DataTable
           items={items}
-          empty="No cache events in this window."
+          empty="当前窗口暂无缓存事件。"
           columns={[
-            { key: "event", header: "Event", render: (item) => item.event_type },
-            { key: "model", header: "Model", render: (item) => item.requested_model },
-            { key: "reason", header: "Reason", render: (item) => item.reason ?? "-" },
-            { key: "cache_key", header: "Cache Key", render: (item) => shortHash(item.cache_key_hash) },
-            { key: "messages", header: "Messages", render: (item) => shortHash(item.messages_hash) },
-            { key: "created", header: "Created", render: (item) => formatDate(item.created_at) }
+            { key: "event", header: "事件", render: (item) => cacheEventLabel(item.event_type) },
+            { key: "model", header: "模型", render: (item) => item.requested_model },
+            { key: "reason", header: "原因", render: (item) => item.reason ?? "-" },
+            { key: "cache_key", header: "缓存键", render: (item) => shortHash(item.cache_key_hash) },
+            { key: "messages", header: "消息数", render: (item) => shortHash(item.messages_hash) },
+            { key: "created", header: "创建时间", render: (item) => formatDate(item.created_at) }
           ]}
         />
       </section>
@@ -97,4 +97,44 @@ export function CachePage({ client }: PageProps) {
 
 function shortHash(value: string) {
   return value ? value.slice(0, 12) : "-";
+}
+
+function cacheEventLabel(eventType: string) {
+  if (eventType === "hit") {
+    return "命中";
+  }
+  if (eventType === "miss") {
+    return "未命中";
+  }
+  if (eventType === "store") {
+    return "存储";
+  }
+  if (eventType === "skip") {
+    return "跳过";
+  }
+  if (eventType === "read_error") {
+    return "读取失败";
+  }
+  if (eventType === "write_error") {
+    return "写入失败";
+  }
+  if (eventType === "semantic_hit") {
+    return "语义命中";
+  }
+  if (eventType === "semantic_miss") {
+    return "语义未命中";
+  }
+  if (eventType === "semantic_skip") {
+    return "语义跳过";
+  }
+  if (eventType === "semantic_store") {
+    return "语义存储";
+  }
+  if (eventType === "semantic_read_error") {
+    return "语义读取失败";
+  }
+  if (eventType === "semantic_write_error") {
+    return "语义写入失败";
+  }
+  return eventType;
 }

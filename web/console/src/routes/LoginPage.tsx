@@ -19,6 +19,12 @@ export function LoginPage({ onLogin }: LoginPageProps) {
   function selectMode(nextMode: "admin-token" | "passwordless") {
     setMode(nextMode);
     setError("");
+    if (nextMode === "admin-token") {
+      setOrgSlug("");
+      setEmail("");
+    } else {
+      setToken("");
+    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -27,7 +33,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       const slug = orgSlug.trim();
       const userEmail = email.trim();
       if (!slug || !userEmail) {
-        setError("Org slug and email are required.");
+        setError("组织标识和邮箱不能为空。");
         return;
       }
       setLoading(true);
@@ -39,7 +45,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         });
         onLogin(result.token);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Login failed.");
+        setError(err instanceof Error ? err.message : "登录失败。");
       } finally {
         setLoading(false);
       }
@@ -48,7 +54,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
     const trimmed = token.trim();
     if (!trimmed) {
-      setError("Admin Token is required.");
+      setError("管理员令牌不能为空。");
       return;
     }
     setError("");
@@ -58,32 +64,35 @@ export function LoginPage({ onLogin }: LoginPageProps) {
   return (
     <main className="login-screen">
       <form className="login-panel" onSubmit={handleSubmit}>
-        <p className="eyebrow">Management Console</p>
-        <h1>LLM Cost Gateway</h1>
-        <div className="segmented login-mode" aria-label="Login mode">
+        <p className="eyebrow">管理控制台</p>
+        <h1>LLM 成本网关</h1>
+        <div className="segmented login-mode" aria-label="登录方式">
           <button
             className={mode === "admin-token" ? "button-secondary active" : "button-secondary"}
             type="button"
             onClick={() => selectMode("admin-token")}
           >
-            Admin Token
+            管理员令牌登录
           </button>
           <button
             className={mode === "passwordless" ? "button-secondary active" : "button-secondary"}
             type="button"
             onClick={() => selectMode("passwordless")}
           >
-            Passwordless Mock
+            免密登录（演示）
           </button>
         </div>
         {mode === "admin-token" ? (
           <label className="field">
-            <span>Admin Token</span>
+            <span>管理员令牌</span>
             <input
               className="input"
               type="password"
               value={token}
-              onChange={(event) => setToken(event.target.value)}
+              onChange={(event) => {
+                setError("");
+                setToken(event.target.value);
+              }}
               placeholder="llmgw_admin_..."
               autoComplete="off"
             />
@@ -91,22 +100,28 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         ) : (
           <>
             <label className="field">
-              <span>Org Slug</span>
+              <span>组织标识</span>
               <input
                 className="input"
                 value={orgSlug}
-                onChange={(event) => setOrgSlug(event.target.value)}
+                onChange={(event) => {
+                  setError("");
+                  setOrgSlug(event.target.value);
+                }}
                 placeholder="demo-org"
                 autoComplete="organization"
               />
             </label>
             <label className="field">
-              <span>Email</span>
+              <span>邮箱</span>
               <input
                 className="input"
                 type="email"
                 value={email}
-                onChange={(event) => setEmail(event.target.value)}
+                onChange={(event) => {
+                  setError("");
+                  setEmail(event.target.value);
+                }}
                 placeholder="owner@example.com"
                 autoComplete="email"
               />
@@ -115,7 +130,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         )}
         {error && <div className="alert error">{error}</div>}
         <button className="button" type="submit" disabled={loading}>
-          {loading ? "Signing in..." : "Sign in"}
+          {loading ? "登录中..." : "登录"}
         </button>
       </form>
     </main>

@@ -56,16 +56,16 @@ export function DashboardPage({ client }: PageProps) {
   return (
     <div className="page-grid">
       <section className="metric-grid">
-        <Metric label="Requests" value={metrics.requestCount.toLocaleString()} />
-        <Metric label="Tokens" value={metrics.totalTokens.toLocaleString()} />
-        <Metric label="Cost" value={formatMicroUSD(metrics.totalCost)} />
-        <Metric label="Errors" value={metrics.errorCount.toLocaleString()} />
-        <Metric label="Error Rate" value={`${metrics.errorRate.toFixed(2)}%`} />
+        <Metric label="请求数" value={metrics.requestCount.toLocaleString()} />
+        <Metric label="令牌数" value={metrics.totalTokens.toLocaleString()} />
+        <Metric label="成本" value={formatMicroUSD(metrics.totalCost)} />
+        <Metric label="错误数" value={metrics.errorCount.toLocaleString()} />
+        <Metric label="错误率" value={`${metrics.errorRate.toFixed(2)}%`} />
       </section>
       {error && <div className="alert error">{error}</div>}
       <section className="dashboard-grid">
         <div className="panel">
-          <h2>Daily Requests</h2>
+          <h2>每日请求</h2>
           <ColumnChart
             items={daily.map((item) => ({
               label: item.label,
@@ -75,7 +75,7 @@ export function DashboardPage({ client }: PageProps) {
           />
         </div>
         <div className="panel">
-          <h2>Daily Cost</h2>
+          <h2>每日成本</h2>
           <ColumnChart
             items={daily.map((item) => ({
               label: item.label,
@@ -85,7 +85,7 @@ export function DashboardPage({ client }: PageProps) {
           />
         </div>
         <div className="panel">
-          <h2>Model Cost Breakdown</h2>
+          <h2>模型成本明细</h2>
           <BreakdownChart
             items={summary.map((item) => ({
               label: groupLabel(item, "model"),
@@ -95,28 +95,28 @@ export function DashboardPage({ client }: PageProps) {
           />
         </div>
         <div className="panel">
-          <h2>Recent Request Logs</h2>
-          <DataTable
-            items={logs}
-            empty="No recent requests."
-            columns={[
-              { key: "model", header: "Model", render: (item) => item.request_model ?? "-" },
-              { key: "status", header: "Status", render: (item) => item.status },
-              { key: "latency", header: "Latency", render: (item) => `${item.latency_ms}ms` },
-              { key: "started", header: "Started", render: (item) => formatDate(item.started_at) }
+          <h2>最近请求日志</h2>
+            <DataTable
+              items={logs}
+              empty="暂无最近请求。"
+              columns={[
+                { key: "model", header: "模型", render: (item) => item.request_model ?? "-" },
+                { key: "status", header: "状态", render: (item) => requestLogStatusLabel(item.status) },
+                { key: "latency", header: "延迟", render: (item) => `${item.latency_ms}ms` },
+                { key: "started", header: "开始时间", render: (item) => formatDate(item.started_at) }
             ]}
           />
         </div>
         <div className="panel">
-          <h2>Usage By Model</h2>
+          <h2>按模型用量</h2>
           <DataTable
             items={summary}
-            empty="No usage yet."
+            empty="暂无用量。"
             columns={[
-              { key: "model", header: "Model", render: (item) => groupLabel(item, "model") },
-              { key: "requests", header: "Requests", render: (item) => item.request_count },
-              { key: "tokens", header: "Tokens", render: (item) => item.total_tokens },
-              { key: "cost", header: "Cost", render: (item) => formatMicroUSD(item.total_cost_micro_usd) }
+              { key: "model", header: "模型", render: (item) => groupLabel(item, "model") },
+              { key: "requests", header: "请求数", render: (item) => item.request_count },
+              { key: "tokens", header: "令牌数", render: (item) => item.total_tokens },
+              { key: "cost", header: "成本", render: (item) => formatMicroUSD(item.total_cost_micro_usd) }
             ]}
           />
         </div>
@@ -156,7 +156,7 @@ function BreakdownChart({ items }: { items: Array<{ label: string; value: number
   const sorted = [...items].sort((a, b) => b.value - a.value).slice(0, 6);
   const max = Math.max(1, ...sorted.map((item) => item.value));
   if (sorted.length === 0) {
-    return <div className="empty-state">No model cost yet.</div>;
+    return <div className="empty-state">暂无模型成本数据。</div>;
   }
 
   return (
@@ -204,4 +204,23 @@ function rate(part: number, total: number) {
     return 0;
   }
   return (part / total) * 100;
+}
+
+function requestLogStatusLabel(status: string) {
+  if (status === "success") {
+    return "成功";
+  }
+  if (status === "error") {
+    return "错误";
+  }
+  if (status === "rate_limited") {
+    return "速率受限";
+  }
+  if (status === "budget_warned") {
+    return "预算告警";
+  }
+  if (status === "budget_blocked") {
+    return "预算阻断";
+  }
+  return status;
 }

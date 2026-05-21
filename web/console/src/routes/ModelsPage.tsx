@@ -32,11 +32,11 @@ export function ModelsPage({ client }: PageProps) {
     const outputPrice = numberValue(form, "output_price", 0);
     const contextWindow = numberValue(form, "context_window", 0);
     if (!providerID || !providerModelName || !displayName) {
-      setError("Provider, provider model name and display name are required.");
+      setError("供应商、供应商模型名和显示名不能为空。");
       return;
     }
     if (inputPrice < 0 || outputPrice < 0) {
-      setError("Prices must be non-negative.");
+      setError("价格必须为非负数。");
       return;
     }
     setError("");
@@ -55,55 +55,55 @@ export function ModelsPage({ client }: PageProps) {
   return (
     <div className="page-grid">
       <section className="panel">
-        <h2>Create Model</h2>
+        <h2>创建模型</h2>
         <form className="form-grid" onSubmit={handleCreate}>
           <label className="field">
-            <span>Provider</span>
+            <span>供应商</span>
             <select className="select" name="provider_id" defaultValue="">
-              <option value="" disabled>Select provider</option>
+              <option value="" disabled>请选择供应商</option>
               {providers.map((provider) => (
                 <option key={provider.id} value={provider.id}>{provider.name}</option>
               ))}
             </select>
           </label>
           <label className="field">
-            <span>Provider Model Name</span>
+            <span>供应商模型名</span>
             <input className="input" name="provider_model_name" placeholder="mock-small" />
           </label>
           <label className="field">
-            <span>Display Name</span>
-            <input className="input" name="display_name" placeholder="Mock Small" />
+            <span>显示名称</span>
+            <input className="input" name="display_name" placeholder="示例模型" />
           </label>
           <label className="field">
-            <span>Input price / 1K tokens</span>
+            <span>输入价格 / 1000 令牌</span>
             <input className="input" name="input_price" type="number" defaultValue={0} min={0} />
           </label>
           <label className="field">
-            <span>Output price / 1K tokens</span>
+            <span>输出价格 / 1000 令牌</span>
             <input className="input" name="output_price" type="number" defaultValue={0} min={0} />
           </label>
           <label className="field">
-            <span>Context Window</span>
+            <span>上下文窗口</span>
             <input className="input" name="context_window" type="number" placeholder="8192" min={1} />
           </label>
           <div className="form-actions">
-            <button className="button" type="submit">Create model</button>
+            <button className="button" type="submit">创建模型</button>
           </div>
         </form>
         {error && <div className="alert error">{error}</div>}
       </section>
       <section className="panel">
-        <h2>Models</h2>
+        <h2>模型</h2>
         <DataTable
           items={models}
-          empty="No models yet."
+          empty="暂无模型。"
           columns={[
-            { key: "display", header: "Display", render: (item) => item.display_name },
-            { key: "provider_model", header: "Provider Model", render: (item) => item.provider_model_name },
-            { key: "provider", header: "Provider", render: (item) => providerName(providers, item.provider_id) },
-            { key: "input", header: "Input Price", render: (item) => item.input_price_micro_usd_per_1k_tokens },
-            { key: "output", header: "Output Price", render: (item) => item.output_price_micro_usd_per_1k_tokens },
-            { key: "status", header: "Status", render: (item) => item.status }
+            { key: "display", header: "显示名称", render: (item) => item.display_name },
+            { key: "provider_model", header: "供应商模型名", render: (item) => item.provider_model_name },
+            { key: "provider", header: "供应商", render: (item) => providerName(providers, item.provider_id) },
+            { key: "input", header: "输入价格", render: (item) => item.input_price_micro_usd_per_1k_tokens },
+            { key: "output", header: "输出价格", render: (item) => item.output_price_micro_usd_per_1k_tokens },
+            { key: "status", header: "状态", render: (item) => modelStatusLabel(item.status) }
           ]}
         />
       </section>
@@ -113,4 +113,14 @@ export function ModelsPage({ client }: PageProps) {
 
 function providerName(providers: Provider[], id: string) {
   return providers.find((provider) => provider.id === id)?.name ?? id;
+}
+
+function modelStatusLabel(status: string) {
+  if (status === "active") {
+    return "启用";
+  }
+  if (status === "inactive") {
+    return "停用";
+  }
+  return status;
 }

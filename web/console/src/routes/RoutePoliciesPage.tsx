@@ -97,20 +97,20 @@ export function RoutePoliciesPage({ client }: PageProps) {
     const activeTargets = strategy === "single" ? targets.slice(0, 1) : targets;
     const minimumTargets = strategy === "fallback" ? 2 : 1;
     if (!name || !matchModel) {
-      setError("Name and match model are required.");
+      setError("名称和匹配模型不能为空。");
       return;
     }
     if (activeTargets.length < minimumTargets) {
-      setError("This strategy needs more targets.");
+      setError("当前策略需要更多目标。");
       return;
     }
     if (activeTargets.some((target) => !target.providerID || !target.modelID)) {
-      setError("Every target needs a provider and model.");
+      setError("每个目标都需要供应商和模型。");
       return;
     }
     const parsedMaxCost = maxEstimatedCost === "" ? undefined : Number(maxEstimatedCost);
     if (parsedMaxCost !== undefined && (!Number.isFinite(parsedMaxCost) || parsedMaxCost < 0)) {
-      setError("Max estimated cost must be zero or greater.");
+      setError("最大预估成本不能小于 0。");
       return;
     }
     const parsedLatencyWindow =
@@ -121,7 +121,7 @@ export function RoutePoliciesPage({ client }: PageProps) {
         !Number.isFinite(parsedLatencyWindow) ||
         parsedLatencyWindow <= 0)
     ) {
-      setError("Latency window must be greater than zero.");
+      setError("延迟窗口必须大于 0。");
       return;
     }
     setError("");
@@ -165,19 +165,19 @@ export function RoutePoliciesPage({ client }: PageProps) {
   return (
     <div className="page-grid">
       <section className="panel">
-        <h2>Create Route Policy</h2>
+        <h2>创建路由策略</h2>
         <form className="form-grid" onSubmit={handleCreate}>
           <label className="field">
-            <span>Name</span>
+            <span>名称</span>
             <input className="input" name="name" placeholder="fast-chat route" />
           </label>
           <label className="field">
-            <span>Match Model</span>
+            <span>匹配模型</span>
             <input className="input" name="match_model" placeholder="fast-chat" />
           </label>
           <div className="field span-2">
-            <span>Strategy</span>
-            <div className="segmented" role="group" aria-label="Route strategy">
+            <span>策略</span>
+            <div className="segmented" role="group" aria-label="路由策略">
               {(["single", "fallback", "lowest_cost", "lowest_latency"] as RouteStrategy[]).map((item) => (
                 <button
                   key={item}
@@ -185,17 +185,17 @@ export function RoutePoliciesPage({ client }: PageProps) {
                   type="button"
                   onClick={() => updateStrategy(item)}
                 >
-                  {item}
+                  {strategyLabel(item)}
                 </button>
               ))}
             </div>
           </div>
           {strategy === "lowest_cost" && (
             <div className="field span-2">
-              <span>Cost Controls</span>
+              <span>成本控制</span>
               <div className="target-row">
                 <label className="target-field">
-                  <span>Max estimated cost</span>
+                  <span>最大预估成本</span>
                   <input
                     className="input"
                     min="0"
@@ -208,14 +208,14 @@ export function RoutePoliciesPage({ client }: PageProps) {
                   />
                 </label>
                 <label className="target-field">
-                  <span>Priority fallback</span>
+                    <span>优先级回退</span>
                   <select
                     className="select"
                     value={fallbackToPriority ? "true" : "false"}
                     onChange={(event) => setFallbackToPriority(event.target.value === "true")}
                   >
-                    <option value="true">Enabled</option>
-                    <option value="false">Disabled</option>
+                    <option value="true">启用</option>
+                    <option value="false">禁用</option>
                   </select>
                 </label>
               </div>
@@ -223,10 +223,10 @@ export function RoutePoliciesPage({ client }: PageProps) {
           )}
           {strategy === "lowest_latency" && (
             <div className="field span-2">
-              <span>Latency Controls</span>
+              <span>延迟控制</span>
               <div className="target-row">
                 <label className="target-field">
-                  <span>Stats window minutes</span>
+                  <span>统计窗口（分钟）</span>
                   <input
                     className="input"
                     min="1"
@@ -242,7 +242,7 @@ export function RoutePoliciesPage({ client }: PageProps) {
             </div>
           )}
           <div className="field span-2">
-            <span>Targets</span>
+            <span>目标</span>
             <div className="target-list">
               {targets.map((target, index) => {
                 const selectableModels = target.providerID
@@ -252,7 +252,7 @@ export function RoutePoliciesPage({ client }: PageProps) {
                   <div className="target-row" key={index}>
                     <div className="target-index">{index + 1}</div>
                     <label className="target-field">
-                      <span>Provider</span>
+                      <span>供应商</span>
                       <select
                         className="select"
                         value={target.providerID}
@@ -260,28 +260,28 @@ export function RoutePoliciesPage({ client }: PageProps) {
                           updateTarget(index, { providerID: event.target.value, modelID: "" })
                         }
                       >
-                        <option value="">Select provider</option>
+                        <option value="">请选择供应商</option>
                         {providers.map((provider) => (
                           <option key={provider.id} value={provider.id}>{provider.name}</option>
                         ))}
                       </select>
                     </label>
                     <label className="target-field">
-                      <span>Model</span>
+                      <span>模型</span>
                       <select
                         className="select"
                         value={target.modelID}
                         onChange={(event) => updateTarget(index, { modelID: event.target.value })}
                         disabled={!target.providerID}
                       >
-                        <option value="">Select model</option>
+                        <option value="">请选择模型</option>
                         {selectableModels.map((model) => (
                           <option key={model.id} value={model.id}>{model.display_name}</option>
                         ))}
                       </select>
                     </label>
                     <label className="target-field target-weight">
-                      <span>Weight</span>
+                      <span>权重</span>
                       <input
                         className="input"
                         min="1"
@@ -299,7 +299,7 @@ export function RoutePoliciesPage({ client }: PageProps) {
                       onClick={() => removeTarget(index)}
                       disabled={targets.length <= (strategy === "fallback" ? 2 : 1)}
                     >
-                      Remove
+                      移除
                     </button>
                   </div>
                 );
@@ -308,32 +308,32 @@ export function RoutePoliciesPage({ client }: PageProps) {
             {strategy !== "single" && (
               <div className="target-actions">
                 <button className="button-secondary" type="button" onClick={addTarget}>
-                  Add target
+                  添加目标
                 </button>
               </div>
             )}
           </div>
           <div className="form-actions">
-            <button className="button" type="submit">Create policy</button>
+            <button className="button" type="submit">创建策略</button>
           </div>
         </form>
         {error && <div className="alert error">{error}</div>}
       </section>
       <section className="panel">
-        <h2>Route Policies</h2>
+        <h2>路由策略</h2>
         <DataTable
           items={policies}
-          empty="No route policies yet."
+          empty="暂无路由策略。"
           columns={[
-            { key: "name", header: "Name", render: (item) => item.name },
-            { key: "match", header: "Match Model", render: (item) => item.match_model },
-            { key: "strategy", header: "Strategy", render: (item) => item.strategy },
+            { key: "name", header: "名称", render: (item) => item.name },
+            { key: "match", header: "匹配模型", render: (item) => item.match_model },
+            { key: "strategy", header: "策略", render: (item) => strategyLabel(item.strategy) },
             {
               key: "config",
-              header: "Config",
+              header: "配置",
               render: (item) => routePolicyConfigLabel(item)
             },
-            { key: "status", header: "Status", render: (item) => item.status }
+            { key: "status", header: "状态", render: (item) => routePolicyStatusLabel(item.status) }
           ]}
         />
       </section>
@@ -343,12 +343,35 @@ export function RoutePoliciesPage({ client }: PageProps) {
 
 function routePolicyConfigLabel(item: RoutePolicy) {
   if (item.strategy === "lowest_latency") {
-    return `${item.config?.latency_window_minutes ?? 15}m window`;
+    return `${item.config?.latency_window_minutes ?? 15} 分钟窗口`;
   }
   if (item.strategy === "lowest_cost") {
     const maxCost = item.config?.max_estimated_cost_micro_usd;
     const fallback = item.config?.fallback_to_priority ?? true;
-    return `${maxCost === undefined ? "no cap" : `${maxCost} micro USD`} / ${fallback ? "fallback" : "strict"}`;
+    return `${maxCost === undefined ? "无上限" : `${maxCost} micro USD`} / ${fallback ? "回退" : "严格"}`;
   }
   return "-";
+}
+
+function routePolicyStatusLabel(status: string) {
+  if (status === "active") {
+    return "启用";
+  }
+  if (status === "inactive") {
+    return "停用";
+  }
+  return status;
+}
+
+function strategyLabel(strategy: string) {
+  if (strategy === "single") {
+    return "单一";
+  }
+  if (strategy === "fallback") {
+    return "回退";
+  }
+  if (strategy === "lowest_cost") {
+    return "最低成本";
+  }
+  return "最低延迟";
 }

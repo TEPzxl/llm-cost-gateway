@@ -29,7 +29,7 @@ export function MembersPage({ client, me }: MembersPageProps) {
     const displayName = formValue(form, "display_name");
     const role = formValue(form, "role");
     if (!email || !["owner", "admin", "viewer"].includes(role)) {
-      setError("Email and role are required.");
+      setError("邮箱和角色不能为空。");
       return;
     }
     setError("");
@@ -46,27 +46,27 @@ export function MembersPage({ client, me }: MembersPageProps) {
     <div className="page-grid">
       {canManage && (
         <section className="panel">
-          <h2>Add or update member</h2>
+          <h2>新增或更新成员</h2>
           <form className="form-grid" onSubmit={handleCreate}>
             <label className="field">
-              <span>Email</span>
+              <span>邮箱</span>
               <input className="input" name="email" type="email" placeholder="member@example.com" />
             </label>
             <label className="field">
-              <span>Display name</span>
-              <input className="input" name="display_name" placeholder="Member name" />
+              <span>显示名称</span>
+              <input className="input" name="display_name" placeholder="显示名称" />
             </label>
             <label className="field">
-              <span>Role</span>
+              <span>角色</span>
               <select className="input" name="role" defaultValue="viewer">
-                <option value="owner">Owner</option>
-                <option value="admin">Admin</option>
-                <option value="viewer">Viewer</option>
+                <option value="owner">拥有者</option>
+                <option value="admin">管理员</option>
+                <option value="viewer">查看者</option>
               </select>
             </label>
             <div className="form-actions">
               <button className="button" type="submit">
-                Save member
+                保存成员
               </button>
             </div>
           </form>
@@ -74,18 +74,18 @@ export function MembersPage({ client, me }: MembersPageProps) {
         </section>
       )}
       <section className="panel">
-        <h2>Members</h2>
-        {!canManage && <p className="muted">Admins can view members. Only owners can add or update them.</p>}
+        <h2>成员</h2>
+        {!canManage && <p className="muted">管理员可查看成员，只有拥有者可新增或更新成员。</p>}
         {error && !canManage && <div className="alert error">{error}</div>}
         <DataTable
           items={items}
-          empty="No members yet."
+          empty="暂无成员。"
           columns={[
-            { key: "email", header: "Email", render: (item) => item.email },
-            { key: "name", header: "Name", render: (item) => item.display_name },
-            { key: "role", header: "Role", render: (item) => roleLabel(item.role) },
-            { key: "status", header: "Status", render: (item) => item.status },
-            { key: "created", header: "Created", render: (item) => formatDate(item.created_at) }
+            { key: "email", header: "邮箱", render: (item) => item.email },
+            { key: "name", header: "名称", render: (item) => item.display_name },
+            { key: "role", header: "角色", render: (item) => roleLabel(item.role) },
+            { key: "status", header: "状态", render: (item) => memberStatusLabel(item.status) },
+            { key: "created", header: "创建时间", render: (item) => formatDate(item.created_at) }
           ]}
         />
       </section>
@@ -96,12 +96,22 @@ export function MembersPage({ client, me }: MembersPageProps) {
 function roleLabel(role: string) {
   switch (role) {
     case "owner":
-      return "Owner";
+      return "拥有者";
     case "admin":
-      return "Admin";
+      return "管理员";
     case "viewer":
-      return "Viewer";
-    default:
-      return role;
+      return "查看者";
+  default:
+    return role;
   }
+}
+
+function memberStatusLabel(status: string) {
+  if (status === "active") {
+    return "启用";
+  }
+  if (status === "disabled") {
+    return "停用";
+  }
+  return status;
 }

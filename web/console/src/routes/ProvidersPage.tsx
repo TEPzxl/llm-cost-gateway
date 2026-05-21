@@ -27,11 +27,11 @@ export function ProvidersPage({ client }: PageProps) {
     const apiKey = formValue(form, "api_key");
     const timeout = numberValue(form, "timeout_ms", 30000);
     if (!name || timeout <= 0) {
-      setError("Name and timeout are required.");
+      setError("名称和超时时间不能为空。");
       return;
     }
     if (providerType === "openai_compatible" && (!baseUrl || !apiKey)) {
-      setError("Base URL and API key are required for OpenAI-compatible providers.");
+      setError("OpenAI 兼容供应商需要填写基础地址和 API 密钥。");
       return;
     }
     setError("");
@@ -54,7 +54,7 @@ export function ProvidersPage({ client }: PageProps) {
       await client.checkProviderHealth(id);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Health check failed.");
+      setError(err instanceof Error ? err.message : "健康检查失败。");
     } finally {
       setCheckingID("");
     }
@@ -63,71 +63,71 @@ export function ProvidersPage({ client }: PageProps) {
   return (
     <div className="page-grid">
       <section className="panel">
-        <h2>Create Provider</h2>
+        <h2>新增供应商</h2>
         <form className="form-grid" onSubmit={handleCreate}>
           <label className="field">
-            <span>Name</span>
+            <span>名称</span>
             <input className="input" name="name" placeholder="mock-provider" />
           </label>
           <label className="field">
-            <span>Type</span>
+            <span>类型</span>
             <select
               className="select"
               name="type"
               value={providerType}
               onChange={(event) => setProviderType(event.target.value as "mock" | "openai_compatible")}
             >
-              <option value="mock">mock</option>
-              <option value="openai_compatible">openai_compatible</option>
+              <option value="mock">模拟</option>
+              <option value="openai_compatible">OpenAI 兼容</option>
             </select>
           </label>
           <label className="field">
-            <span>Base URL</span>
+            <span>基础地址</span>
             <input className="input" name="base_url" placeholder="https://api.example.com/v1" />
           </label>
           <label className="field">
-            <span>API Key</span>
+            <span>API 密钥</span>
             <input className="input" name="api_key" type="password" autoComplete="off" />
           </label>
           <label className="field">
-            <span>Timeout MS</span>
+            <span>超时（毫秒）</span>
             <input className="input" name="timeout_ms" type="number" defaultValue={30000} min={1} />
           </label>
           <div className="form-actions">
-            <button className="button" type="submit">Create provider</button>
+            <button className="button" type="submit">新增供应商</button>
           </div>
         </form>
         {error && <div className="alert error">{error}</div>}
       </section>
       <section className="panel">
-        <h2>Providers</h2>
+        <h2>供应商</h2>
         <DataTable
           items={items}
-          empty="No providers yet."
+          empty="暂无供应商。"
           columns={[
-            { key: "name", header: "Name", render: (item) => item.name },
-            { key: "type", header: "Type", render: (item) => item.type },
-            { key: "base", header: "Base URL", render: (item) => item.base_url ?? "-" },
-            { key: "timeout", header: "Timeout", render: (item) => item.timeout_ms },
-            { key: "status", header: "Status", render: (item) => item.status },
+            { key: "name", header: "名称", render: (item) => item.name },
+            { key: "type", header: "类型", render: (item) => providerTypeLabel(item.type) },
+            { key: "base", header: "基础地址", render: (item) => item.base_url ?? "-" },
+            { key: "timeout", header: "超时", render: (item) => item.timeout_ms },
+            { key: "status", header: "状态", render: (item) => providerStatusLabel(item.status) },
             {
               key: "health",
-              header: "Health",
+              header: "健康",
               render: (item) => (
-                <span className={`status-pill ${item.last_health_status ?? "unknown"}`}>
-                  {item.last_health_status ?? "unknown"}
+                <span className={`status-pill ${providerHealthClass(item.last_health_status)}`}>
+                  {providerHealthStatusLabel(item.last_health_status)}
                 </span>
               )
             },
             {
               key: "checked",
-              header: "Checked",
+              header: "检测时间",
               render: (item) => formatDateTime(item.last_health_checked_at)
             },
-            { key: "error", header: "Last Error", render: (item) => item.last_error_code ?? "-" },
+            { key: "error", header: "最近错误", render: (item) => item.last_error_code ?? "-" },
             {
               key: "actions",
-              header: "Actions",
+              header: "操作",
               render: (item) => (
                 <button
                   className="button-secondary"
@@ -135,7 +135,7 @@ export function ProvidersPage({ client }: PageProps) {
                   onClick={() => checkHealth(item.id)}
                   disabled={checkingID === item.id}
                 >
-                  {checkingID === item.id ? "Checking" : "Check"}
+                  {checkingID === item.id ? "检查中" : "检查"}
                 </button>
               )
             }
@@ -154,4 +154,41 @@ function formatDateTime(value?: string | null) {
     dateStyle: "short",
     timeStyle: "short"
   }).format(new Date(value));
+}
+
+function providerTypeLabel(type: string) {
+  if (type === "mock") {
+    return "Mock";
+  }
+  if (type === "openai_compatible") {
+    return "OpenAI 兼容";
+  }
+  return type;
+}
+
+function providerStatusLabel(status: string) {
+  if (status === "active") {
+    return "启用";
+  }
+  if (status === "inactive") {
+    return "停用";
+  }
+  return status;
+}
+
+function providerHealthStatusLabel(status?: string | null) {
+  if (status === "healthy") {
+    return "健康";
+  }
+  if (status === "unhealthy") {
+    return "异常";
+  }
+  return "未知";
+}
+
+function providerHealthClass(status?: string | null) {
+  if (status === "healthy" || status === "unhealthy") {
+    return status;
+  }
+  return "unknown";
 }

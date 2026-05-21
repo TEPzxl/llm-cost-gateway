@@ -29,16 +29,20 @@ export function UsageSummaryPage({ client }: PageProps) {
   return (
     <div className="page-grid">
       <section className="panel">
-        <h2>Usage Summary</h2>
+        <h2>用量汇总</h2>
         <div className="segmented">
-          {(["provider", "model", "api_key"] as GroupBy[]).map((item) => (
+          {([
+            { key: "provider", label: "供应商" },
+            { key: "model", label: "模型" },
+            { key: "api_key", label: "API 密钥" }
+          ] as Array<{ key: GroupBy; label: string }>).map((item) => (
             <button
-              key={item}
-              className={groupBy === item ? "button" : "button-secondary"}
+              key={item.key}
+              className={groupBy === item.key ? "button" : "button-secondary"}
               type="button"
-              onClick={() => changeGroup(item)}
+              onClick={() => changeGroup(item.key)}
             >
-              {item}
+              {item.label}
             </button>
           ))}
         </div>
@@ -47,15 +51,15 @@ export function UsageSummaryPage({ client }: PageProps) {
       <section className="panel">
         <DataTable
           items={items}
-          empty="No usage in the selected window."
+          empty="当前窗口暂无用量。"
           columns={[
-            { key: "group", header: "Group", render: (item) => groupLabel(item, groupBy) },
-            { key: "requests", header: "Requests", render: (item) => item.request_count },
-            { key: "success", header: "Success", render: (item) => item.success_count },
-            { key: "errors", header: "Errors", render: (item) => item.error_count },
-            { key: "tokens", header: "Tokens", render: (item) => item.total_tokens },
-            { key: "cost", header: "Cost", render: (item) => formatMicroUSD(item.total_cost_micro_usd) },
-            { key: "latency", header: "Avg latency", render: (item) => `${Math.round(item.avg_latency_ms)}ms` }
+            { key: "group", header: "分组", render: (item) => groupLabel(item, groupBy) },
+            { key: "requests", header: "请求数", render: (item) => item.request_count },
+            { key: "success", header: "成功", render: (item) => item.success_count },
+            { key: "errors", header: "错误", render: (item) => item.error_count },
+            { key: "tokens", header: "令牌数", render: (item) => item.total_tokens },
+            { key: "cost", header: "成本", render: (item) => formatMicroUSD(item.total_cost_micro_usd) },
+            { key: "latency", header: "平均延迟", render: (item) => `${Math.round(item.avg_latency_ms)}ms` }
           ]}
         />
       </section>
