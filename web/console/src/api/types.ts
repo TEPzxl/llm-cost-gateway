@@ -210,3 +210,50 @@ export type UsageSummaryResponse = {
   group_by: "provider" | "model" | "api_key";
   items: UsageSummaryItem[];
 };
+
+export type AnalyticsDailyCostPoint = {
+  day: string;
+  request_count: number;
+  total_cost_micro_usd: number;
+};
+
+export type AnalyticsModelCostItem = {
+  model_id: ID;
+  request_count: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  total_cost_micro_usd: number;
+};
+
+export type AnalyticsProviderLatencyItem = {
+  provider_id: ID;
+  request_count: number;
+  avg_latency_ms: number;
+  p50_latency_ms: number;
+  p95_latency_ms: number;
+  p99_latency_ms: number;
+};
+
+export type AnalyticsErrorRatePoint = {
+  day: string;
+  request_count: number;
+  error_count: number;
+  error_rate: number;
+};
+
+export type AnalyticsDailyCostResponse = {
+  items: AnalyticsDailyCostPoint[];
+};
+
+export type AnalyticsModelCostResponse = {
+  items: AnalyticsModelCostItem[];
+};
+
+export type AnalyticsProviderLatencyResponse = {
+  items: AnalyticsProviderLatencyItem[];
+};
+
+export type AnalyticsErrorRateResponse = {
+  items: AnalyticsErrorRatePoint[];
+};

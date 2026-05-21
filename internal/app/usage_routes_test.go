@@ -45,6 +45,40 @@ func TestAdminUsageSummaryAfterSuccessfulGatewayRequest(t *testing.T) {
 	}
 }
 
+func TestAdminAnalyticsRoutesAfterGatewayRequests(t *testing.T) {
+	router, _, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+
+	success := performChatCompletion(t, router, apiKey.Key, `{"model":"fast-chat","messages":[{"role":"user","content":"hello"}]}`)
+	if success.Code != http.StatusOK {
+		t.Fatalf("chat completion status = %d, want %d; body=%s", success.Code, http.StatusOK, success.Body.String())
+	}
+	missing := performChatCompletion(t, router, apiKey.Key, `{"model":"missing-model","messages":[{"role":"user","content":"hello"}]}`)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing route status = %d, want %d; body=%s", missing.Code, http.StatusNotFound, missing.Body.String())
+	}
+
+	query := analyticsWindowQuery()
+	daily := getAnalyticsDailyCostViaHTTP(t, router, apiKey.AdminToken, query)
+	if len(daily.Items) != 1 || daily.Items[0].RequestCount != 2 || daily.Items[0].TotalCostMicroUSD != 8 {
+		t.Fatalf("daily analytics = %+v, want request=2 cost=8", daily)
+	}
+
+	models := getAnalyticsModelBreakdownViaHTTP(t, router, apiKey.AdminToken, query)
+	if len(models.Items) != 1 || models.Items[0].RequestCount != 1 || models.Items[0].TotalTokens != 50 || models.Items[0].TotalCostMicroUSD != 8 {
+		t.Fatalf("model analytics = %+v, want one successful request", models)
+	}
+
+	latency := getAnalyticsProviderLatencyViaHTTP(t, router, apiKey.AdminToken, query)
+	if len(latency.Items) != 1 || latency.Items[0].RequestCount != 1 {
+		t.Fatalf("provider latency analytics = %+v, want one provider item", latency)
+	}
+
+	errors := getAnalyticsErrorRateViaHTTP(t, router, apiKey.AdminToken, query)
+	if len(errors.Items) != 1 || errors.Items[0].RequestCount != 2 || errors.Items[0].ErrorCount != 1 || errors.Items[0].ErrorRate != 0.5 {
+		t.Fatalf("error analytics = %+v, want request=2 error=1 rate=.5", errors)
+	}
+}
+
 func TestAdminUsageSummaryRejectsInvalidGroupBy(t *testing.T) {
 	router, _ := newTask5TestRouter(t)
 	orgID := createOrgViaHTTP(t, router, "Invalid Usage Org", "invalid-usage-org")
@@ -144,6 +178,10 @@ func TestAdminUsageRoutesAreScopedByOrg(t *testing.T) {
 	if len(summaryB.Items) != 0 {
 		t.Fatalf("org B summary count = %d, want 0", len(summaryB.Items))
 	}
+	dailyB := getAnalyticsDailyCostViaHTTP(t, router, adminB.Token, analyticsWindowQuery())
+	if len(dailyB.Items) != 0 {
+		t.Fatalf("org B analytics daily count = %d, want 0", len(dailyB.Items))
+	}
 }
 
 type requestLogsRouteResponse struct {
@@ -167,6 +205,45 @@ type usageSummaryRouteResponse struct {
 		CompletionTokens  int64 `json:"completion_tokens"`
 		TotalTokens       int64 `json:"total_tokens"`
 		TotalCostMicroUSD int64 `json:"total_cost_micro_usd"`
+	} `json:"items"`
+}
+
+type analyticsDailyCostRouteResponse struct {
+	Items []struct {
+		Day               string `json:"day"`
+		RequestCount      int64  `json:"request_count"`
+		TotalCostMicroUSD int64  `json:"total_cost_micro_usd"`
+	} `json:"items"`
+}
+
+type analyticsModelBreakdownRouteResponse struct {
+	Items []struct {
+		ModelID           string `json:"model_id"`
+		RequestCount      int64  `json:"request_count"`
+		PromptTokens      int64  `json:"prompt_tokens"`
+		CompletionTokens  int64  `json:"completion_tokens"`
+		TotalTokens       int64  `json:"total_tokens"`
+		TotalCostMicroUSD int64  `json:"total_cost_micro_usd"`
+	} `json:"items"`
+}
+
+type analyticsProviderLatencyRouteResponse struct {
+	Items []struct {
+		ProviderID       string  `json:"provider_id"`
+		RequestCount     int64   `json:"request_count"`
+		AverageLatencyMS float64 `json:"avg_latency_ms"`
+		P50LatencyMS     float64 `json:"p50_latency_ms"`
+		P95LatencyMS     float64 `json:"p95_latency_ms"`
+		P99LatencyMS     float64 `json:"p99_latency_ms"`
+	} `json:"items"`
+}
+
+type analyticsErrorRateRouteResponse struct {
+	Items []struct {
+		Day          string  `json:"day"`
+		RequestCount int64   `json:"request_count"`
+		ErrorCount   int64   `json:"error_count"`
+		ErrorRate    float64 `json:"error_rate"`
 	} `json:"items"`
 }
 
@@ -214,4 +291,61 @@ func getUsageSummaryViaHTTP(t *testing.T, router http.Handler, adminToken string
 		t.Fatalf("decode usage summary response: %v", err)
 	}
 	return response
+}
+
+func getAnalyticsDailyCostViaHTTP(t *testing.T, router http.Handler, adminToken string, query string) analyticsDailyCostRouteResponse {
+	t.Helper()
+
+	var response analyticsDailyCostRouteResponse
+	getAdminJSON(t, router, adminToken, "/api/v1/admin/analytics/daily-cost", query, &response)
+	return response
+}
+
+func getAnalyticsModelBreakdownViaHTTP(t *testing.T, router http.Handler, adminToken string, query string) analyticsModelBreakdownRouteResponse {
+	t.Helper()
+
+	var response analyticsModelBreakdownRouteResponse
+	getAdminJSON(t, router, adminToken, "/api/v1/admin/analytics/model-cost-breakdown", query, &response)
+	return response
+}
+
+func getAnalyticsProviderLatencyViaHTTP(t *testing.T, router http.Handler, adminToken string, query string) analyticsProviderLatencyRouteResponse {
+	t.Helper()
+
+	var response analyticsProviderLatencyRouteResponse
+	getAdminJSON(t, router, adminToken, "/api/v1/admin/analytics/provider-latency", query, &response)
+	return response
+}
+
+func getAnalyticsErrorRateViaHTTP(t *testing.T, router http.Handler, adminToken string, query string) analyticsErrorRateRouteResponse {
+	t.Helper()
+
+	var response analyticsErrorRateRouteResponse
+	getAdminJSON(t, router, adminToken, "/api/v1/admin/analytics/error-rate", query, &response)
+	return response
+}
+
+func getAdminJSON(t *testing.T, router http.Handler, adminToken string, path string, query string, target any) {
+	t.Helper()
+
+	if query != "" {
+		path += "?" + query
+	}
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want %d; body=%s", path, rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), target); err != nil {
+		t.Fatalf("decode %s response: %v", path, err)
+	}
+}
+
+func analyticsWindowQuery() string {
+	from := time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339)
+	to := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
+	return "from=" + url.QueryEscape(from) + "&to=" + url.QueryEscape(to)
 }

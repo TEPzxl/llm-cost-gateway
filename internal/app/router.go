@@ -129,6 +129,7 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	auditHandler := admin.NewAuditHandler(auditService)
 	requestLogHandler := admin.NewRequestLogHandler(cfg.Store.Queries)
 	usageHandler := admin.NewUsageHandler(cfg.Store.Queries)
+	analyticsHandler := admin.NewAnalyticsHandler(cfg.UsageAnalytics, cfg.Store.Queries)
 
 	group := router.Group("/api/v1/admin")
 	group.Use(middleware.AdminTokenAuth(adminTokenService))
@@ -156,6 +157,10 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	group.GET("/audit-logs", auditHandler.List)
 	group.GET("/request-logs", requestLogHandler.List)
 	group.GET("/usage/summary", usageHandler.Summary)
+	group.GET("/analytics/daily-cost", analyticsHandler.DailyCostTrend)
+	group.GET("/analytics/model-cost-breakdown", analyticsHandler.ModelCostBreakdown)
+	group.GET("/analytics/provider-latency", analyticsHandler.ProviderLatency)
+	group.GET("/analytics/error-rate", analyticsHandler.ErrorRateTrend)
 }
 
 func ginMode(appEnv string) string {

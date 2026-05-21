@@ -2,6 +2,10 @@ import type {
   APIKey,
   APIKeyCreateResponse,
   AdminAuditLog,
+  AnalyticsDailyCostResponse,
+  AnalyticsErrorRateResponse,
+  AnalyticsModelCostResponse,
+  AnalyticsProviderLatencyResponse,
   Budget,
   BudgetAlert,
   BudgetAlertDelivery,
@@ -124,6 +128,22 @@ export function createApiClient(options: ApiClientOptions) {
     listRequestLogs: (query = "") =>
       request<RequestLogsResponse>(`/api/v1/admin/request-logs${query}`),
     usageSummary: (query = "") =>
-      request<UsageSummaryResponse>(`/api/v1/admin/usage/summary${query}`)
+      request<UsageSummaryResponse>(`/api/v1/admin/usage/summary${query}`),
+    analyticsDailyCost: (query = "") =>
+      request<AnalyticsDailyCostResponse>(
+        `/api/v1/admin/analytics/daily-cost${query}`
+      ),
+    analyticsModelCostBreakdown: (query = "") =>
+      request<AnalyticsModelCostResponse>(
+        `/api/v1/admin/analytics/model-cost-breakdown${query}`
+      ),
+    analyticsProviderLatency: (query = "") =>
+      request<AnalyticsProviderLatencyResponse>(
+        `/api/v1/admin/analytics/provider-latency${query}`
+      ),
+    analyticsErrorRate: (query = "") =>
+      request<AnalyticsErrorRateResponse>(
+        `/api/v1/admin/analytics/error-rate${query}`
+      )
   };
 }
