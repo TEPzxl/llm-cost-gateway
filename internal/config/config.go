@@ -32,6 +32,8 @@ type Config struct {
 	ClickHouseDatabase     string   `yaml:"clickhouse_database"`
 	ClickHouseUsername     string   `yaml:"clickhouse_username"`
 	ClickHousePassword     string   `yaml:"clickhouse_password"`
+	PromptCacheEnabled     bool     `yaml:"prompt_cache_enabled"`
+	PromptCacheTTLSeconds  int      `yaml:"prompt_cache_ttl_seconds"`
 }
 
 func Load(path string) (Config, error) {
@@ -107,6 +109,9 @@ func (c Config) Validate() error {
 			return fmt.Errorf("CLICKHOUSE_USERNAME is required when ClickHouse is enabled")
 		}
 	}
+	if c.PromptCacheTTLSeconds <= 0 {
+		return fmt.Errorf("PROMPT_CACHE_TTL_SECONDS must be greater than 0")
+	}
 	return nil
 }
 
@@ -126,6 +131,8 @@ func defaultConfig() Config {
 		ClickHouseURL:      "http://localhost:8123",
 		ClickHouseDatabase: "llmgw",
 		ClickHouseUsername: "default",
+		PromptCacheEnabled: true,
+		PromptCacheTTLSeconds: 300,
 	}
 }
 
@@ -192,6 +199,20 @@ func applyEnv(cfg *Config) error {
 	setStringFromEnv("CLICKHOUSE_DATABASE", &cfg.ClickHouseDatabase)
 	setStringFromEnv("CLICKHOUSE_USERNAME", &cfg.ClickHouseUsername)
 	setStringFromEnv("CLICKHOUSE_PASSWORD", &cfg.ClickHousePassword)
+	if value := os.Getenv("PROMPT_CACHE_ENABLED"); value != "" {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("parse PROMPT_CACHE_ENABLED: %w", err)
+		}
+		cfg.PromptCacheEnabled = enabled
+	}
+	if value := os.Getenv("PROMPT_CACHE_TTL_SECONDS"); value != "" {
+		ttl, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("parse PROMPT_CACHE_TTL_SECONDS: %w", err)
+		}
+		cfg.PromptCacheTTLSeconds = ttl
+	}
 	return nil
 }
 

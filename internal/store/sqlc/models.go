@@ -98,6 +98,19 @@ type BudgetAlertDelivery struct {
 	CreatedAt         time.Time   `db:"created_at" json:"created_at"`
 }
 
+type CacheEvent struct {
+	ID             uuid.UUID        `db:"id" json:"id"`
+	OrgID          uuid.UUID        `db:"org_id" json:"org_id"`
+	RequestLogID   *uuid.UUID       `db:"request_log_id" json:"request_log_id"`
+	EventType      string           `db:"event_type" json:"event_type"`
+	RequestedModel string           `db:"requested_model" json:"requested_model"`
+	CacheKeyHash   string           `db:"cache_key_hash" json:"cache_key_hash"`
+	MessagesHash   string           `db:"messages_hash" json:"messages_hash"`
+	Reason         pgtype.Text      `db:"reason" json:"reason"`
+	Metadata       *json.RawMessage `db:"metadata" json:"metadata"`
+	CreatedAt      time.Time        `db:"created_at" json:"created_at"`
+}
+
 type CostRecord struct {
 	ID               uuid.UUID       `db:"id" json:"id"`
 	UsageRecordID    uuid.UUID       `db:"usage_record_id" json:"usage_record_id"`

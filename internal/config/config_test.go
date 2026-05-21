@@ -59,6 +59,12 @@ func TestLoadUsesDefaultsAndEnvironment(t *testing.T) {
 	if cfg.ClickHouseUsername != "default" {
 		t.Fatalf("ClickHouseUsername = %q, want default", cfg.ClickHouseUsername)
 	}
+	if !cfg.PromptCacheEnabled {
+		t.Fatal("PromptCacheEnabled = false, want true")
+	}
+	if cfg.PromptCacheTTLSeconds != 300 {
+		t.Fatalf("PromptCacheTTLSeconds = %d, want 300", cfg.PromptCacheTTLSeconds)
+	}
 }
 
 func TestLoadReadsConfigFileAndEnvironmentOverrides(t *testing.T) {
@@ -73,6 +79,8 @@ func TestLoadReadsConfigFileAndEnvironmentOverrides(t *testing.T) {
 	t.Setenv("CLICKHOUSE_DATABASE", "env_llmgw")
 	t.Setenv("CLICKHOUSE_USERNAME", "env_user")
 	t.Setenv("CLICKHOUSE_PASSWORD", "env_password")
+	t.Setenv("PROMPT_CACHE_ENABLED", "false")
+	t.Setenv("PROMPT_CACHE_TTL_SECONDS", "60")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	content := []byte(`
@@ -95,6 +103,8 @@ clickhouse_url: http://file-clickhouse:8123
 clickhouse_database: file_llmgw
 clickhouse_username: file_user
 clickhouse_password: file_password
+prompt_cache_enabled: true
+prompt_cache_ttl_seconds: 120
 `)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
@@ -152,6 +162,12 @@ clickhouse_password: file_password
 	}
 	if cfg.ClickHousePassword != "env_password" {
 		t.Fatalf("ClickHousePassword = %q, want env_password", cfg.ClickHousePassword)
+	}
+	if cfg.PromptCacheEnabled {
+		t.Fatal("PromptCacheEnabled = true, want environment override false")
+	}
+	if cfg.PromptCacheTTLSeconds != 60 {
+		t.Fatalf("PromptCacheTTLSeconds = %d, want environment override 60", cfg.PromptCacheTTLSeconds)
 	}
 }
 
@@ -265,6 +281,24 @@ func TestLoadRejectsInvalidBoundaryValues(t *testing.T) {
 			env: map[string]string{
 				"CLICKHOUSE_ENABLED": "true",
 				"CLICKHOUSE_URL":     "postgres://localhost:8123",
+			},
+		},
+		{
+			name: "prompt cache enabled is not a bool",
+			env: map[string]string{
+				"PROMPT_CACHE_ENABLED": "sometimes",
+			},
+		},
+		{
+			name: "prompt cache ttl is not a number",
+			env: map[string]string{
+				"PROMPT_CACHE_TTL_SECONDS": "soon",
+			},
+		},
+		{
+			name: "prompt cache ttl is zero",
+			env: map[string]string{
+				"PROMPT_CACHE_TTL_SECONDS": "0",
 			},
 		},
 	}

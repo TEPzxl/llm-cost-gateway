@@ -11,6 +11,7 @@ sql:
       - db/migrations/000007_admin_audit_logs.up.sql
       - db/migrations/000008_route_policy_config.up.sql
       - db/migrations/000009_route_lowest_latency.up.sql
+      - db/migrations/000010_cache_events.up.sql
     queries: db/query
     gen:
       go:
