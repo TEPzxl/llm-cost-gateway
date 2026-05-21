@@ -15,8 +15,9 @@ type SecretBox struct {
 }
 
 type SealedSecret struct {
-	Encrypted string
-	Nonce     string
+	Encrypted  string
+	Nonce      string
+	KeyVersion int32
 }
 
 func NewSecretBox(key string) (*SecretBox, error) {

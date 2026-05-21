@@ -36,6 +36,7 @@ func (e *ValidationError) Error() string {
 type Service struct {
 	store               *store.Store
 	secretEncryptionKey string
+	secretKeyRing       *secretcrypto.SecretKeyRing
 	publicOutboundOnly  bool
 }
 
@@ -44,6 +45,14 @@ type ServiceOption func(*Service)
 func WithPublicOutboundOnly(enabled bool) ServiceOption {
 	return func(s *Service) {
 		s.publicOutboundOnly = enabled
+	}
+}
+
+func WithSecretKeyRing(keyRing *secretcrypto.SecretKeyRing) ServiceOption {
+	return func(s *Service) {
+		if keyRing != nil {
+			s.secretKeyRing = keyRing
+		}
 	}
 }
 
@@ -67,9 +76,11 @@ type CreateModelParams struct {
 }
 
 func NewService(st *store.Store, secretEncryptionKey string, opts ...ServiceOption) *Service {
+	keyRing, _ := secretcrypto.NewSingleKeyRing(secretEncryptionKey)
 	service := &Service{
 		store:               st,
 		secretEncryptionKey: secretEncryptionKey,
+		secretKeyRing:       keyRing,
 	}
 	for _, opt := range opts {
 		opt(service)
@@ -105,11 +116,10 @@ func (s *Service) CreateProvider(ctx context.Context, params CreateProviderParam
 			return nil
 		}
 
-		box, err := secretcrypto.NewSecretBox(s.secretEncryptionKey)
-		if err != nil {
-			return err
+		if s.secretKeyRing == nil {
+			return fmt.Errorf("provider secret keyring is invalid")
 		}
-		sealed, err := box.Seal(strings.TrimSpace(*params.APIKey))
+		sealed, err := s.secretKeyRing.Seal(strings.TrimSpace(*params.APIKey))
 		if err != nil {
 			return err
 		}
@@ -119,7 +129,7 @@ func (s *Service) CreateProvider(ctx context.Context, params CreateProviderParam
 			ProviderID:      provider.ID,
 			EncryptedApiKey: sealed.Encrypted,
 			Nonce:           sealed.Nonce,
-			KeyVersion:      defaultKeyVersion,
+			KeyVersion:      sealed.KeyVersion,
 			CreatedAt:       now,
 			UpdatedAt:       now,
 		})

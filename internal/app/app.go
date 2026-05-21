@@ -11,6 +11,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/analytics"
 	promptcache "github.com/tep/llm-cost-gateway/internal/cache"
 	"github.com/tep/llm-cost-gateway/internal/config"
+	secretcrypto "github.com/tep/llm-cost-gateway/internal/crypto"
 	"github.com/tep/llm-cost-gateway/internal/email"
 	"github.com/tep/llm-cost-gateway/internal/embedding"
 	"github.com/tep/llm-cost-gateway/internal/events"
@@ -113,12 +114,17 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 	if err != nil {
 		return nil, fmt.Errorf("init semantic cache: %w", err)
 	}
+	secretKeyRing, err := newSecretKeyRing(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("init secret keyring: %w", err)
+	}
 
 	router := NewRouter(RouterConfig{
 		AppEnv:                   cfg.AppEnv,
 		PlatformBootstrapToken:   cfg.PlatformBootstrapToken,
 		TokenHashSecret:          cfg.TokenHashSecret,
 		SecretEncryptionKey:      cfg.SecretEncryptionKey,
+		SecretKeyRing:            secretKeyRing,
 		MaxRetries:               cfg.MaxRetries,
 		RetryBackoffMS:           cfg.RetryBackoffMS,
 		Store:                    st,
@@ -153,6 +159,18 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 		events: multiCloser(usageEventCloser, analyticsCloser),
 		traces: tracerProvider,
 	}, nil
+}
+
+func newSecretKeyRing(cfg Config) (*secretcrypto.SecretKeyRing, error) {
+	keys, err := cfg.SecretEncryptionKeys()
+	if err != nil {
+		return nil, err
+	}
+	version := cfg.SecretEncryptionKeyVersion
+	if version <= 0 {
+		version = 1
+	}
+	return secretcrypto.NewSecretKeyRing(int32(version), keys)
 }
 
 func newEmailSender(cfg Config) email.Sender {

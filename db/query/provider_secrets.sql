@@ -23,3 +23,20 @@ RETURNING *;
 SELECT *
 FROM provider_secrets
 WHERE org_id = $1 AND provider_id = $2;
+
+-- name: ListProviderSecretsForRotation :many
+SELECT *
+FROM provider_secrets
+WHERE (sqlc.narg('org_id')::uuid IS NULL OR org_id = sqlc.narg('org_id')::uuid)
+ORDER BY org_id, provider_id;
+
+-- name: UpdateProviderSecretCiphertext :one
+UPDATE provider_secrets
+SET encrypted_api_key = $4,
+    nonce = $5,
+    key_version = $6,
+    updated_at = $7
+WHERE org_id = $1
+  AND provider_id = $2
+  AND id = $3
+RETURNING *;

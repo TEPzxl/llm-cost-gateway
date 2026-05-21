@@ -53,6 +53,7 @@ type ChatService struct {
 	metrics             *observability.Metrics
 	retryPolicy         RetryPolicy
 	secretEncryptionKey string
+	secretKeyRing       *secretcrypto.SecretKeyRing
 	clock               func() time.Time
 	usageEvents         events.Publisher
 	usageAnalytics      analytics.Sink
@@ -121,6 +122,14 @@ func WithPublicOutboundOnly(enabled bool) ChatServiceOption {
 		if enabled {
 			s.registry = provider.NewRegistry(provider.WithRegistryPublicOutboundOnly(true))
 			s.alerts = budget.NewAlertService(s.store, budget.WithAlertPublicOutboundOnly(true))
+		}
+	}
+}
+
+func WithSecretKeyRing(keyRing *secretcrypto.SecretKeyRing) ChatServiceOption {
+	return func(s *ChatService) {
+		if keyRing != nil {
+			s.secretKeyRing = keyRing
 		}
 	}
 }
@@ -215,6 +224,7 @@ type contentPolicyDecision struct {
 }
 
 func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observability.Metrics, retryPolicy RetryPolicy, opts ...ChatServiceOption) *ChatService {
+	keyRing, _ := secretcrypto.NewSingleKeyRing(secretEncryptionKey)
 	service := &ChatService{
 		store:               st,
 		resolver:            routing.NewResolver(st.Queries),
@@ -229,6 +239,7 @@ func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observ
 		metrics:             metrics,
 		retryPolicy:         retryPolicy.Normalize(),
 		secretEncryptionKey: secretEncryptionKey,
+		secretKeyRing:       keyRing,
 		clock:               func() time.Time { return time.Now().UTC() },
 		usageEvents:         events.DisabledPublisher{},
 		usageAnalytics:      analytics.DisabledSink{},
@@ -999,11 +1010,10 @@ func (s *ChatService) providerConfig(ctx context.Context, item db.Provider) (con
 		}
 		return contract.ProviderConfig{}, err
 	}
-	box, err := secretcrypto.NewSecretBox(s.secretEncryptionKey)
-	if err != nil {
-		return contract.ProviderConfig{}, err
+	if s.secretKeyRing == nil {
+		return contract.ProviderConfig{}, errors.New("provider secret keyring is invalid")
 	}
-	apiKey, err := box.Open(secret.EncryptedApiKey, secret.Nonce)
+	apiKey, err := s.secretKeyRing.Open(secret.EncryptedApiKey, secret.Nonce, secret.KeyVersion)
 	if err != nil {
 		return contract.ProviderConfig{}, err
 	}

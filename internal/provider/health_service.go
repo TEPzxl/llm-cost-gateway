@@ -27,6 +27,7 @@ const (
 type HealthService struct {
 	store               *store.Store
 	secretEncryptionKey string
+	secretKeyRing       *secretcrypto.SecretKeyRing
 	client              *http.Client
 	clock               func() time.Time
 	publicOutboundOnly  bool
@@ -43,10 +44,20 @@ func WithHealthPublicOutboundOnly(enabled bool) HealthServiceOption {
 	}
 }
 
+func WithHealthSecretKeyRing(keyRing *secretcrypto.SecretKeyRing) HealthServiceOption {
+	return func(s *HealthService) {
+		if keyRing != nil {
+			s.secretKeyRing = keyRing
+		}
+	}
+}
+
 func NewHealthService(st *store.Store, secretEncryptionKey string, opts ...HealthServiceOption) *HealthService {
+	keyRing, _ := secretcrypto.NewSingleKeyRing(secretEncryptionKey)
 	service := &HealthService{
 		store:               st,
 		secretEncryptionKey: secretEncryptionKey,
+		secretKeyRing:       keyRing,
 		client:              netutil.TimeoutHTTPClient(5 * time.Second),
 		clock:               func() time.Time { return time.Now().UTC() },
 	}
@@ -108,11 +119,10 @@ func (s *HealthService) checkOpenAICompatible(ctx context.Context, item db.Provi
 	if err != nil {
 		return domain.CodeProviderError, "provider api key is required"
 	}
-	box, err := secretcrypto.NewSecretBox(s.secretEncryptionKey)
-	if err != nil {
+	if s.secretKeyRing == nil {
 		return domain.CodeProviderError, "provider secret configuration is invalid"
 	}
-	apiKey, err := box.Open(secret.EncryptedApiKey, secret.Nonce)
+	apiKey, err := s.secretKeyRing.Open(secret.EncryptedApiKey, secret.Nonce, secret.KeyVersion)
 	if err != nil {
 		return domain.CodeProviderError, "provider api key decrypt failed"
 	}

@@ -10,6 +10,8 @@ func TestLoadUsesDefaultsAndEnvironment(t *testing.T) {
 	t.Setenv("PLATFORM_BOOTSTRAP_TOKEN", "bootstrap-token")
 	t.Setenv("TOKEN_HASH_SECRET", "token-hash-secret")
 	t.Setenv("SECRET_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("SECRET_ENCRYPTION_KEY_VERSION", "2")
+	t.Setenv("SECRET_ENCRYPTION_KEYRING", "1:0123456789abcdef0123456789abcdef,2:fedcba98765432100123456789abcdef")
 	t.Setenv("SERVER_PORT", "9090")
 
 	cfg, err := Load("")
@@ -25,6 +27,16 @@ func TestLoadUsesDefaultsAndEnvironment(t *testing.T) {
 	}
 	if cfg.DatabaseURL == "" {
 		t.Fatal("DatabaseURL should have a default")
+	}
+	if cfg.SecretEncryptionKeyVersion != 2 {
+		t.Fatalf("SecretEncryptionKeyVersion = %d, want 2", cfg.SecretEncryptionKeyVersion)
+	}
+	keys, err := cfg.SecretEncryptionKeys()
+	if err != nil {
+		t.Fatalf("SecretEncryptionKeys returned error: %v", err)
+	}
+	if len(keys) != 2 || keys[2] != "fedcba98765432100123456789abcdef" {
+		t.Fatalf("SecretEncryptionKeys = %v, want versions 1 and 2", keys)
 	}
 	if cfg.RedisURL == "" {
 		t.Fatal("RedisURL should have a default")
@@ -115,6 +127,8 @@ func TestLoadReadsConfigFileAndEnvironmentOverrides(t *testing.T) {
 	t.Setenv("TRACING_OTLP_ENDPOINT", "https://otel.example.test:4318")
 	t.Setenv("TRACING_INSECURE", "false")
 	t.Setenv("TRACING_SERVICE_NAME", "env-gateway")
+	t.Setenv("SECRET_ENCRYPTION_KEY_VERSION", "2")
+	t.Setenv("SECRET_ENCRYPTION_KEYRING", "1:0123456789abcdef0123456789abcdef,2:fedcba98765432100123456789abcdef")
 	t.Setenv("AUTH_PASSWORDLESS_EMAIL_ENABLED", "true")
 	t.Setenv("AUTH_MAGIC_LINK_BASE_URL", "https://console.example.test/login")
 	t.Setenv("AUTH_MAGIC_LINK_TTL_SECONDS", "600")
@@ -134,6 +148,8 @@ redis_url: redis://file
 platform_bootstrap_token: file-bootstrap
 token_hash_secret: file-hash-secret
 secret_encryption_key: 0123456789abcdef0123456789abcdef
+secret_encryption_key_version: 1
+secret_encryption_keyring: "1:0123456789abcdef0123456789abcdef"
 log_level: debug
 max_retries: 2
 retry_backoff_ms: 125
@@ -185,6 +201,9 @@ smtp_tls_mode: starttls
 	}
 	if cfg.LogLevel != "debug" {
 		t.Fatalf("LogLevel = %q, want debug", cfg.LogLevel)
+	}
+	if cfg.SecretEncryptionKeyVersion != 2 {
+		t.Fatalf("SecretEncryptionKeyVersion = %d, want environment override 2", cfg.SecretEncryptionKeyVersion)
 	}
 	if cfg.MaxRetries != 3 {
 		t.Fatalf("MaxRetries = %d, want environment override 3", cfg.MaxRetries)
@@ -484,6 +503,25 @@ func TestLoadRejectsInvalidBoundaryValues(t *testing.T) {
 			env: map[string]string{
 				"TRACING_ENABLED":       "true",
 				"TRACING_OTLP_ENDPOINT": "   ",
+			},
+		},
+		{
+			name: "secret key version is not a number",
+			env: map[string]string{
+				"SECRET_ENCRYPTION_KEY_VERSION": "latest",
+			},
+		},
+		{
+			name: "secret keyring missing active version",
+			env: map[string]string{
+				"SECRET_ENCRYPTION_KEY_VERSION": "2",
+				"SECRET_ENCRYPTION_KEYRING":     "1:0123456789abcdef0123456789abcdef",
+			},
+		},
+		{
+			name: "secret keyring invalid entry",
+			env: map[string]string{
+				"SECRET_ENCRYPTION_KEYRING": "not-a-version",
 			},
 		},
 		{

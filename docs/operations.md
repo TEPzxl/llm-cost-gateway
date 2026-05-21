@@ -117,6 +117,16 @@ cd web/console && npm test
 make console-build
 ```
 
+## Provider Secret 密钥轮换
+
+Provider API Key 使用 AES-GCM 加密，并通过 `provider_secrets.key_version` 记录密钥版本。轮换前先配置 `SECRET_ENCRYPTION_KEY_VERSION` 和 `SECRET_ENCRYPTION_KEYRING`，再执行 dry-run：
+
+```bash
+go run ./cmd/secret-rotate -config configs/config.example.yaml -dry-run
+```
+
+确认结果后去掉 `-dry-run` 执行实际 re-encryption。详细流程见 `docs/runbooks/secret-rotation.md`。
+
 ## Console
 
 Docker Compose 启动后，管理后台地址为：

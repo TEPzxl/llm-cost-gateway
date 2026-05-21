@@ -11,6 +11,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/budget"
 	promptcache "github.com/tep/llm-cost-gateway/internal/cache"
 	"github.com/tep/llm-cost-gateway/internal/costing"
+	secretcrypto "github.com/tep/llm-cost-gateway/internal/crypto"
 	"github.com/tep/llm-cost-gateway/internal/email"
 	"github.com/tep/llm-cost-gateway/internal/embedding"
 	"github.com/tep/llm-cost-gateway/internal/events"
@@ -36,6 +37,7 @@ type RouterConfig struct {
 	PlatformBootstrapToken   string
 	TokenHashSecret          string
 	SecretEncryptionKey      string
+	SecretKeyRing            *secretcrypto.SecretKeyRing
 	MaxRetries               int
 	RetryBackoffMS           int
 	Store                    *store.Store
@@ -110,6 +112,7 @@ func registerGatewayRoutes(router *gin.Engine, cfg RouterConfig) {
 		gatewayservice.WithUsageAnalyticsSink(cfg.UsageAnalytics),
 		gatewayservice.WithPromptCache(cfg.PromptCache),
 		gatewayservice.WithSemanticCache(cfg.SemanticCache, cfg.EmbeddingAdapter, cfg.SemanticCacheThreshold, cfg.SemanticCacheMaxTemp),
+		gatewayservice.WithSecretKeyRing(cfg.SecretKeyRing),
 		gatewayservice.WithPublicOutboundOnly(cfg.AppEnv == "production"),
 		gatewayservice.WithLogger(cfg.Logger),
 	)
@@ -145,8 +148,8 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	}
 	apiKeyService := auth.NewAPIKeyService(cfg.Store.Queries, cfg.TokenHashSecret)
 	publicOutboundOnly := cfg.AppEnv == "production"
-	providerService := provider.NewService(cfg.Store, cfg.SecretEncryptionKey, provider.WithPublicOutboundOnly(publicOutboundOnly))
-	providerHealthService := provider.NewHealthService(cfg.Store, cfg.SecretEncryptionKey, provider.WithHealthPublicOutboundOnly(publicOutboundOnly))
+	providerService := provider.NewService(cfg.Store, cfg.SecretEncryptionKey, provider.WithPublicOutboundOnly(publicOutboundOnly), provider.WithSecretKeyRing(cfg.SecretKeyRing))
+	providerHealthService := provider.NewHealthService(cfg.Store, cfg.SecretEncryptionKey, provider.WithHealthPublicOutboundOnly(publicOutboundOnly), provider.WithHealthSecretKeyRing(cfg.SecretKeyRing))
 	pricingService := costing.NewPricingService(cfg.Store)
 	routePolicyService := routing.NewService(cfg.Store)
 	budgetService := budget.NewService(cfg.Store.Queries)

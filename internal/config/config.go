@@ -14,42 +14,44 @@ import (
 const aes256KeyLength = 32
 
 type Config struct {
-	AppEnv                   string   `yaml:"app_env"`
-	ServerPort               int      `yaml:"server_port"`
-	DatabaseURL              string   `yaml:"database_url"`
-	RedisURL                 string   `yaml:"redis_url"`
-	PlatformBootstrapToken   string   `yaml:"platform_bootstrap_token"`
-	TokenHashSecret          string   `yaml:"token_hash_secret"`
-	SecretEncryptionKey      string   `yaml:"secret_encryption_key"`
-	LogLevel                 string   `yaml:"log_level"`
-	MaxRetries               int      `yaml:"max_retries"`
-	RetryBackoffMS           int      `yaml:"retry_backoff_ms"`
-	KafkaEnabled             bool     `yaml:"kafka_enabled"`
-	KafkaBrokers             []string `yaml:"kafka_brokers"`
-	KafkaUsageTopic          string   `yaml:"kafka_usage_topic"`
-	ClickHouseEnabled        bool     `yaml:"clickhouse_enabled"`
-	ClickHouseURL            string   `yaml:"clickhouse_url"`
-	ClickHouseDatabase       string   `yaml:"clickhouse_database"`
-	ClickHouseUsername       string   `yaml:"clickhouse_username"`
-	ClickHousePassword       string   `yaml:"clickhouse_password"`
-	PromptCacheEnabled       bool     `yaml:"prompt_cache_enabled"`
-	PromptCacheTTLSeconds    int      `yaml:"prompt_cache_ttl_seconds"`
-	SemanticCacheEnabled     bool     `yaml:"semantic_cache_enabled"`
-	SemanticCacheThreshold   float64  `yaml:"semantic_cache_threshold"`
-	SemanticCacheMaxTemp     float64  `yaml:"semantic_cache_max_temperature"`
-	TracingEnabled           bool     `yaml:"tracing_enabled"`
-	TracingOTLPEndpoint      string   `yaml:"tracing_otlp_endpoint"`
-	TracingInsecure          bool     `yaml:"tracing_insecure"`
-	TracingServiceName       string   `yaml:"tracing_service_name"`
-	PasswordlessEmailEnabled bool     `yaml:"auth_passwordless_email_enabled"`
-	MagicLinkBaseURL         string   `yaml:"auth_magic_link_base_url"`
-	MagicLinkTTLSeconds      int      `yaml:"auth_magic_link_ttl_seconds"`
-	SMTPHost                 string   `yaml:"smtp_host"`
-	SMTPPort                 int      `yaml:"smtp_port"`
-	SMTPUsername             string   `yaml:"smtp_username"`
-	SMTPPassword             string   `yaml:"smtp_password"`
-	SMTPFrom                 string   `yaml:"smtp_from"`
-	SMTPTLSMode              string   `yaml:"smtp_tls_mode"`
+	AppEnv                     string   `yaml:"app_env"`
+	ServerPort                 int      `yaml:"server_port"`
+	DatabaseURL                string   `yaml:"database_url"`
+	RedisURL                   string   `yaml:"redis_url"`
+	PlatformBootstrapToken     string   `yaml:"platform_bootstrap_token"`
+	TokenHashSecret            string   `yaml:"token_hash_secret"`
+	SecretEncryptionKey        string   `yaml:"secret_encryption_key"`
+	SecretEncryptionKeyVersion int      `yaml:"secret_encryption_key_version"`
+	SecretEncryptionKeyring    string   `yaml:"secret_encryption_keyring"`
+	LogLevel                   string   `yaml:"log_level"`
+	MaxRetries                 int      `yaml:"max_retries"`
+	RetryBackoffMS             int      `yaml:"retry_backoff_ms"`
+	KafkaEnabled               bool     `yaml:"kafka_enabled"`
+	KafkaBrokers               []string `yaml:"kafka_brokers"`
+	KafkaUsageTopic            string   `yaml:"kafka_usage_topic"`
+	ClickHouseEnabled          bool     `yaml:"clickhouse_enabled"`
+	ClickHouseURL              string   `yaml:"clickhouse_url"`
+	ClickHouseDatabase         string   `yaml:"clickhouse_database"`
+	ClickHouseUsername         string   `yaml:"clickhouse_username"`
+	ClickHousePassword         string   `yaml:"clickhouse_password"`
+	PromptCacheEnabled         bool     `yaml:"prompt_cache_enabled"`
+	PromptCacheTTLSeconds      int      `yaml:"prompt_cache_ttl_seconds"`
+	SemanticCacheEnabled       bool     `yaml:"semantic_cache_enabled"`
+	SemanticCacheThreshold     float64  `yaml:"semantic_cache_threshold"`
+	SemanticCacheMaxTemp       float64  `yaml:"semantic_cache_max_temperature"`
+	TracingEnabled             bool     `yaml:"tracing_enabled"`
+	TracingOTLPEndpoint        string   `yaml:"tracing_otlp_endpoint"`
+	TracingInsecure            bool     `yaml:"tracing_insecure"`
+	TracingServiceName         string   `yaml:"tracing_service_name"`
+	PasswordlessEmailEnabled   bool     `yaml:"auth_passwordless_email_enabled"`
+	MagicLinkBaseURL           string   `yaml:"auth_magic_link_base_url"`
+	MagicLinkTTLSeconds        int      `yaml:"auth_magic_link_ttl_seconds"`
+	SMTPHost                   string   `yaml:"smtp_host"`
+	SMTPPort                   int      `yaml:"smtp_port"`
+	SMTPUsername               string   `yaml:"smtp_username"`
+	SMTPPassword               string   `yaml:"smtp_password"`
+	SMTPFrom                   string   `yaml:"smtp_from"`
+	SMTPTLSMode                string   `yaml:"smtp_tls_mode"`
 }
 
 func Load(path string) (Config, error) {
@@ -89,6 +91,12 @@ func (c Config) Validate() error {
 	}
 	if len(c.SecretEncryptionKey) != aes256KeyLength {
 		return fmt.Errorf("SECRET_ENCRYPTION_KEY must be %d bytes for AES-256", aes256KeyLength)
+	}
+	if c.SecretEncryptionKeyVersion <= 0 {
+		return fmt.Errorf("SECRET_ENCRYPTION_KEY_VERSION must be greater than 0")
+	}
+	if _, err := c.SecretEncryptionKeys(); err != nil {
+		return err
 	}
 	if c.ServerPort <= 0 || c.ServerPort > 65535 {
 		return fmt.Errorf("SERVER_PORT must be between 1 and 65535")
@@ -172,34 +180,35 @@ func (c Config) Validate() error {
 
 func defaultConfig() Config {
 	return Config{
-		AppEnv:                   "development",
-		ServerPort:               8080,
-		DatabaseURL:              "postgres://llmgw:llmgw@localhost:5432/llmgw?sslmode=disable",
-		RedisURL:                 "redis://localhost:6379/0",
-		LogLevel:                 "info",
-		MaxRetries:               1,
-		RetryBackoffMS:           100,
-		KafkaEnabled:             false,
-		KafkaBrokers:             []string{},
-		KafkaUsageTopic:          "llm-usage-events",
-		ClickHouseEnabled:        false,
-		ClickHouseURL:            "http://localhost:8123",
-		ClickHouseDatabase:       "llmgw",
-		ClickHouseUsername:       "default",
-		PromptCacheEnabled:       true,
-		PromptCacheTTLSeconds:    300,
-		SemanticCacheEnabled:     false,
-		SemanticCacheThreshold:   0.92,
-		SemanticCacheMaxTemp:     0.3,
-		TracingEnabled:           false,
-		TracingOTLPEndpoint:      "localhost:4318",
-		TracingInsecure:          true,
-		TracingServiceName:       "llm-cost-gateway",
-		PasswordlessEmailEnabled: false,
-		MagicLinkBaseURL:         "http://localhost:3000",
-		MagicLinkTTLSeconds:      900,
-		SMTPPort:                 587,
-		SMTPTLSMode:              "starttls",
+		AppEnv:                     "development",
+		ServerPort:                 8080,
+		DatabaseURL:                "postgres://llmgw:llmgw@localhost:5432/llmgw?sslmode=disable",
+		RedisURL:                   "redis://localhost:6379/0",
+		SecretEncryptionKeyVersion: 1,
+		LogLevel:                   "info",
+		MaxRetries:                 1,
+		RetryBackoffMS:             100,
+		KafkaEnabled:               false,
+		KafkaBrokers:               []string{},
+		KafkaUsageTopic:            "llm-usage-events",
+		ClickHouseEnabled:          false,
+		ClickHouseURL:              "http://localhost:8123",
+		ClickHouseDatabase:         "llmgw",
+		ClickHouseUsername:         "default",
+		PromptCacheEnabled:         true,
+		PromptCacheTTLSeconds:      300,
+		SemanticCacheEnabled:       false,
+		SemanticCacheThreshold:     0.92,
+		SemanticCacheMaxTemp:       0.3,
+		TracingEnabled:             false,
+		TracingOTLPEndpoint:        "localhost:4318",
+		TracingInsecure:            true,
+		TracingServiceName:         "llm-cost-gateway",
+		PasswordlessEmailEnabled:   false,
+		MagicLinkBaseURL:           "http://localhost:3000",
+		MagicLinkTTLSeconds:        900,
+		SMTPPort:                   587,
+		SMTPTLSMode:                "starttls",
 	}
 }
 
@@ -221,6 +230,14 @@ func applyEnv(cfg *Config) error {
 	setStringFromEnv("PLATFORM_BOOTSTRAP_TOKEN", &cfg.PlatformBootstrapToken)
 	setStringFromEnv("TOKEN_HASH_SECRET", &cfg.TokenHashSecret)
 	setStringFromEnv("SECRET_ENCRYPTION_KEY", &cfg.SecretEncryptionKey)
+	if value := os.Getenv("SECRET_ENCRYPTION_KEY_VERSION"); value != "" {
+		version, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("parse SECRET_ENCRYPTION_KEY_VERSION: %w", err)
+		}
+		cfg.SecretEncryptionKeyVersion = version
+	}
+	setStringFromEnv("SECRET_ENCRYPTION_KEYRING", &cfg.SecretEncryptionKeyring)
 	setStringFromEnv("LOG_LEVEL", &cfg.LogLevel)
 
 	if value := os.Getenv("SERVER_PORT"); value != "" {
@@ -363,6 +380,40 @@ func splitCSV(value string) []string {
 		}
 	}
 	return result
+}
+
+func (c Config) SecretEncryptionKeys() (map[int32]string, error) {
+	version := c.SecretEncryptionKeyVersion
+	if version <= 0 {
+		version = 1
+	}
+	if strings.TrimSpace(c.SecretEncryptionKeyring) == "" {
+		return map[int32]string{int32(version): c.SecretEncryptionKey}, nil
+	}
+	entries := splitCSV(c.SecretEncryptionKeyring)
+	keys := make(map[int32]string, len(entries))
+	for _, entry := range entries {
+		versionText, key, ok := strings.Cut(entry, ":")
+		if !ok {
+			return nil, fmt.Errorf("SECRET_ENCRYPTION_KEYRING entries must use version:key format")
+		}
+		version, err := strconv.Atoi(strings.TrimSpace(versionText))
+		if err != nil {
+			return nil, fmt.Errorf("parse SECRET_ENCRYPTION_KEYRING version: %w", err)
+		}
+		if version <= 0 {
+			return nil, fmt.Errorf("SECRET_ENCRYPTION_KEYRING version must be greater than 0")
+		}
+		trimmedKey := strings.TrimSpace(key)
+		if len(trimmedKey) != aes256KeyLength {
+			return nil, fmt.Errorf("SECRET_ENCRYPTION_KEYRING key version %d must be %d bytes for AES-256", version, aes256KeyLength)
+		}
+		keys[int32(version)] = trimmedKey
+	}
+	if _, ok := keys[int32(version)]; !ok {
+		return nil, fmt.Errorf("SECRET_ENCRYPTION_KEY_VERSION must exist in SECRET_ENCRYPTION_KEYRING")
+	}
+	return keys, nil
 }
 
 func validAppEnv(value string) bool {

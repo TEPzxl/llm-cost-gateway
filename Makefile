@@ -1,4 +1,4 @@
-.PHONY: up down migrate-up migrate-down verify-migration seed-demo smoke-test sqlc-generate test run console-install console-build
+.PHONY: up down migrate-up migrate-down verify-migration seed-demo smoke-test sqlc-generate test run secret-rotate console-install console-build
 
 CONFIG_FILE ?= configs/config.example.yaml
 COMPOSE ?= docker compose -f deploy/docker-compose.yml --project-directory .
@@ -33,6 +33,9 @@ test:
 
 run:
 	CONFIG_FILE=$(CONFIG_FILE) go run ./cmd/gateway
+
+secret-rotate:
+	go run ./cmd/secret-rotate -config $(CONFIG_FILE) -dry-run
 
 console-install:
 	cd web/console && npm install

@@ -39,6 +39,88 @@ func (q *Queries) GetProviderSecret(ctx context.Context, arg GetProviderSecretPa
 	return i, err
 }
 
+const listProviderSecretsForRotation = `-- name: ListProviderSecretsForRotation :many
+SELECT id, org_id, provider_id, encrypted_api_key, nonce, key_version, created_at, updated_at
+FROM provider_secrets
+WHERE ($1::uuid IS NULL OR org_id = $1::uuid)
+ORDER BY org_id, provider_id
+`
+
+func (q *Queries) ListProviderSecretsForRotation(ctx context.Context, orgID *uuid.UUID) ([]ProviderSecret, error) {
+	rows, err := q.db.Query(ctx, listProviderSecretsForRotation, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ProviderSecret{}
+	for rows.Next() {
+		var i ProviderSecret
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.ProviderID,
+			&i.EncryptedApiKey,
+			&i.Nonce,
+			&i.KeyVersion,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateProviderSecretCiphertext = `-- name: UpdateProviderSecretCiphertext :one
+UPDATE provider_secrets
+SET encrypted_api_key = $4,
+    nonce = $5,
+    key_version = $6,
+    updated_at = $7
+WHERE org_id = $1
+  AND provider_id = $2
+  AND id = $3
+RETURNING id, org_id, provider_id, encrypted_api_key, nonce, key_version, created_at, updated_at
+`
+
+type UpdateProviderSecretCiphertextParams struct {
+	OrgID           uuid.UUID `db:"org_id" json:"org_id"`
+	ProviderID      uuid.UUID `db:"provider_id" json:"provider_id"`
+	ID              uuid.UUID `db:"id" json:"id"`
+	EncryptedApiKey string    `db:"encrypted_api_key" json:"encrypted_api_key"`
+	Nonce           string    `db:"nonce" json:"nonce"`
+	KeyVersion      int32     `db:"key_version" json:"key_version"`
+	UpdatedAt       time.Time `db:"updated_at" json:"updated_at"`
+}
+
+func (q *Queries) UpdateProviderSecretCiphertext(ctx context.Context, arg UpdateProviderSecretCiphertextParams) (ProviderSecret, error) {
+	row := q.db.QueryRow(ctx, updateProviderSecretCiphertext,
+		arg.OrgID,
+		arg.ProviderID,
+		arg.ID,
+		arg.EncryptedApiKey,
+		arg.Nonce,
+		arg.KeyVersion,
+		arg.UpdatedAt,
+	)
+	var i ProviderSecret
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.ProviderID,
+		&i.EncryptedApiKey,
+		&i.Nonce,
+		&i.KeyVersion,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const upsertProviderSecret = `-- name: UpsertProviderSecret :one
 INSERT INTO provider_secrets (
   id,
