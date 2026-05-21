@@ -177,6 +177,17 @@ export type AdminAuditLog = {
   created_at: string;
 };
 
+export type CacheEvent = {
+  id: ID;
+  request_log_id?: ID | null;
+  event_type: "hit" | "miss" | "store" | "skip" | "read_error" | "write_error" | string;
+  requested_model: string;
+  cache_key_hash: string;
+  messages_hash: string;
+  reason?: string | null;
+  created_at: string;
+};
+
 export type RequestLog = {
   id: ID;
   api_key_id?: ID | null;

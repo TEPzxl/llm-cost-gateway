@@ -9,6 +9,7 @@ export type ConsolePage =
   | "budgets"
   | "budget-alerts"
   | "audit-logs"
+  | "cache"
   | "request-logs"
   | "usage-summary";
 
@@ -28,6 +29,7 @@ const navItems: Array<{ id: ConsolePage; label: string }> = [
   { id: "budgets", label: "Budgets" },
   { id: "budget-alerts", label: "Budget Alerts" },
   { id: "audit-logs", label: "Audit Logs" },
+  { id: "cache", label: "Cache" },
   { id: "request-logs", label: "Request Logs" },
   { id: "usage-summary", label: "Usage Summary" }
 ];

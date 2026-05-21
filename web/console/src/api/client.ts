@@ -10,6 +10,7 @@ import type {
   BudgetAlert,
   BudgetAlertDelivery,
   BudgetStatus,
+  CacheEvent,
   CreateAPIKeyRequest,
   CreateBudgetAlertRequest,
   CreateBudgetRequest,
@@ -125,6 +126,8 @@ export function createApiClient(options: ApiClientOptions) {
       ),
     listAuditLogs: () =>
       request<ListResponse<AdminAuditLog>>("/api/v1/admin/audit-logs"),
+    listCacheEvents: (query = "") =>
+      request<ListResponse<CacheEvent>>(`/api/v1/admin/cache-events${query}`),
     listRequestLogs: (query = "") =>
       request<RequestLogsResponse>(`/api/v1/admin/request-logs${query}`),
     usageSummary: (query = "") =>

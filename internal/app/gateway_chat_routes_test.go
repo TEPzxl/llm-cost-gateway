@@ -666,6 +666,7 @@ func TestGatewayChatCompletionsExactCacheHitSkipsProvider(t *testing.T) {
 	assertAppCacheEventCount(t, ctx, st, "store", 1)
 	assertAppCacheEventCount(t, ctx, st, "hit", 1)
 	assertAppLatestRequestLogCacheStatus(t, ctx, st, "hit")
+	assertCacheEventsRouteListsEvents(t, router, apiKey.AdminToken, "hit")
 }
 
 func TestGatewayChatCompletionsExactCacheTemperatureMiss(t *testing.T) {
@@ -997,6 +998,40 @@ func assertAppLatestRequestLogCacheStatus(t *testing.T, ctx context.Context, st 
 	}
 	if got != want {
 		t.Fatalf("cache metadata status = %q, want %q", got, want)
+	}
+}
+
+func assertCacheEventsRouteListsEvents(t *testing.T, router http.Handler, adminToken string, eventType string) {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/cache-events?event_type="+eventType, nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/admin/cache-events status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var response struct {
+		Items []struct {
+			EventType      string `json:"event_type"`
+			RequestedModel string `json:"requested_model"`
+			CacheKeyHash   string `json:"cache_key_hash"`
+			MessagesHash   string `json:"messages_hash"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode cache events response: %v", err)
+	}
+	if len(response.Items) != 1 {
+		t.Fatalf("cache event count = %d, want 1; body=%s", len(response.Items), rec.Body.String())
+	}
+	item := response.Items[0]
+	if item.EventType != eventType || item.RequestedModel != "cache-chat" || item.CacheKeyHash == "" || item.MessagesHash == "" {
+		t.Fatalf("cache event item = %+v", item)
+	}
+	if strings.Contains(rec.Body.String(), "cache me") {
+		t.Fatal("cache events response contains prompt text")
 	}
 }
 

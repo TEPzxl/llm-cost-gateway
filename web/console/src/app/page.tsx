@@ -7,6 +7,7 @@ import { APIKeysPage } from "../routes/APIKeysPage";
 import { AuditLogsPage } from "../routes/AuditLogsPage";
 import { BudgetAlertsPage } from "../routes/BudgetAlertsPage";
 import { BudgetsPage } from "../routes/BudgetsPage";
+import { CachePage } from "../routes/CachePage";
 import { DashboardPage } from "../routes/DashboardPage";
 import { LoginPage } from "../routes/LoginPage";
 import { ModelsPage } from "../routes/ModelsPage";
@@ -55,6 +56,7 @@ export default function HomePage() {
       {activePage === "budgets" && <BudgetsPage client={client} />}
       {activePage === "budget-alerts" && <BudgetAlertsPage client={client} />}
       {activePage === "audit-logs" && <AuditLogsPage client={client} />}
+      {activePage === "cache" && <CachePage client={client} />}
       {activePage === "request-logs" && <RequestLogsPage client={client} />}
       {activePage === "usage-summary" && <UsageSummaryPage client={client} />}
     </Layout>
