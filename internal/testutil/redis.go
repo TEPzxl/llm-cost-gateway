@@ -26,12 +26,7 @@ func OpenRedis(t *testing.T, ctx context.Context) *redis.Client {
 		_ = client.Close()
 		t.Skipf("test redis unavailable at %s: %v", dsn, err)
 	}
-	if err := client.FlushDB(ctx).Err(); err != nil {
-		_ = client.Close()
-		t.Fatalf("flush test redis: %v", err)
-	}
 	t.Cleanup(func() {
-		_ = client.FlushDB(context.Background()).Err()
 		_ = client.Close()
 	})
 
