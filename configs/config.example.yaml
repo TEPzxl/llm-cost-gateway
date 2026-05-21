@@ -16,3 +16,12 @@ clickhouse_url: http://localhost:8123
 clickhouse_database: llmgw
 clickhouse_username: llmgw
 clickhouse_password: llmgw
+prompt_cache_enabled: true
+prompt_cache_ttl_seconds: 300
+semantic_cache_enabled: false
+semantic_cache_threshold: 0.92
+semantic_cache_max_temperature: 0.3
+tracing_enabled: false
+tracing_otlp_endpoint: localhost:4318
+tracing_insecure: true
+tracing_service_name: llm-cost-gateway

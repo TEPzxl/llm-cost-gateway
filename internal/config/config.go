@@ -37,6 +37,10 @@ type Config struct {
 	SemanticCacheEnabled   bool     `yaml:"semantic_cache_enabled"`
 	SemanticCacheThreshold float64  `yaml:"semantic_cache_threshold"`
 	SemanticCacheMaxTemp   float64  `yaml:"semantic_cache_max_temperature"`
+	TracingEnabled         bool     `yaml:"tracing_enabled"`
+	TracingOTLPEndpoint    string   `yaml:"tracing_otlp_endpoint"`
+	TracingInsecure        bool     `yaml:"tracing_insecure"`
+	TracingServiceName     string   `yaml:"tracing_service_name"`
 }
 
 func Load(path string) (Config, error) {
@@ -121,6 +125,14 @@ func (c Config) Validate() error {
 	if c.SemanticCacheMaxTemp < 0 {
 		return fmt.Errorf("SEMANTIC_CACHE_MAX_TEMPERATURE must be greater than or equal to 0")
 	}
+	if c.TracingEnabled {
+		if strings.TrimSpace(c.TracingOTLPEndpoint) == "" {
+			return fmt.Errorf("TRACING_OTLP_ENDPOINT is required when tracing is enabled")
+		}
+		if strings.TrimSpace(c.TracingServiceName) == "" {
+			return fmt.Errorf("TRACING_SERVICE_NAME is required when tracing is enabled")
+		}
+	}
 	return nil
 }
 
@@ -145,6 +157,10 @@ func defaultConfig() Config {
 		SemanticCacheEnabled:   false,
 		SemanticCacheThreshold: 0.92,
 		SemanticCacheMaxTemp:   0.3,
+		TracingEnabled:         false,
+		TracingOTLPEndpoint:    "localhost:4318",
+		TracingInsecure:        true,
+		TracingServiceName:     "llm-cost-gateway",
 	}
 }
 
@@ -246,6 +262,22 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.SemanticCacheMaxTemp = maxTemp
 	}
+	if value := os.Getenv("TRACING_ENABLED"); value != "" {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("parse TRACING_ENABLED: %w", err)
+		}
+		cfg.TracingEnabled = enabled
+	}
+	setStringFromEnv("TRACING_OTLP_ENDPOINT", &cfg.TracingOTLPEndpoint)
+	if value := os.Getenv("TRACING_INSECURE"); value != "" {
+		insecure, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("parse TRACING_INSECURE: %w", err)
+		}
+		cfg.TracingInsecure = insecure
+	}
+	setStringFromEnv("TRACING_SERVICE_NAME", &cfg.TracingServiceName)
 	return nil
 }
 

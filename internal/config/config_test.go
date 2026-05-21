@@ -74,6 +74,18 @@ func TestLoadUsesDefaultsAndEnvironment(t *testing.T) {
 	if cfg.SemanticCacheMaxTemp != 0.3 {
 		t.Fatalf("SemanticCacheMaxTemp = %f, want 0.3", cfg.SemanticCacheMaxTemp)
 	}
+	if cfg.TracingEnabled {
+		t.Fatal("TracingEnabled = true, want false")
+	}
+	if cfg.TracingOTLPEndpoint != "localhost:4318" {
+		t.Fatalf("TracingOTLPEndpoint = %q, want localhost:4318", cfg.TracingOTLPEndpoint)
+	}
+	if !cfg.TracingInsecure {
+		t.Fatal("TracingInsecure = false, want true")
+	}
+	if cfg.TracingServiceName != "llm-cost-gateway" {
+		t.Fatalf("TracingServiceName = %q, want llm-cost-gateway", cfg.TracingServiceName)
+	}
 }
 
 func TestLoadReadsConfigFileAndEnvironmentOverrides(t *testing.T) {
@@ -93,6 +105,10 @@ func TestLoadReadsConfigFileAndEnvironmentOverrides(t *testing.T) {
 	t.Setenv("SEMANTIC_CACHE_ENABLED", "true")
 	t.Setenv("SEMANTIC_CACHE_THRESHOLD", "0.8")
 	t.Setenv("SEMANTIC_CACHE_MAX_TEMPERATURE", "0.2")
+	t.Setenv("TRACING_ENABLED", "true")
+	t.Setenv("TRACING_OTLP_ENDPOINT", "https://otel.example.test:4318")
+	t.Setenv("TRACING_INSECURE", "false")
+	t.Setenv("TRACING_SERVICE_NAME", "env-gateway")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	content := []byte(`
@@ -120,6 +136,10 @@ prompt_cache_ttl_seconds: 120
 semantic_cache_enabled: false
 semantic_cache_threshold: 0.9
 semantic_cache_max_temperature: 0.4
+tracing_enabled: false
+tracing_otlp_endpoint: localhost:4318
+tracing_insecure: true
+tracing_service_name: file-gateway
 `)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
@@ -192,6 +212,18 @@ semantic_cache_max_temperature: 0.4
 	}
 	if cfg.SemanticCacheMaxTemp != 0.2 {
 		t.Fatalf("SemanticCacheMaxTemp = %f, want 0.2", cfg.SemanticCacheMaxTemp)
+	}
+	if !cfg.TracingEnabled {
+		t.Fatal("TracingEnabled = false, want environment override true")
+	}
+	if cfg.TracingOTLPEndpoint != "https://otel.example.test:4318" {
+		t.Fatalf("TracingOTLPEndpoint = %q, want env endpoint", cfg.TracingOTLPEndpoint)
+	}
+	if cfg.TracingInsecure {
+		t.Fatal("TracingInsecure = true, want environment override false")
+	}
+	if cfg.TracingServiceName != "env-gateway" {
+		t.Fatalf("TracingServiceName = %q, want env-gateway", cfg.TracingServiceName)
 	}
 }
 
@@ -347,6 +379,25 @@ func TestLoadRejectsInvalidBoundaryValues(t *testing.T) {
 			name: "semantic cache max temperature is negative",
 			env: map[string]string{
 				"SEMANTIC_CACHE_MAX_TEMPERATURE": "-0.1",
+			},
+		},
+		{
+			name: "tracing enabled is not a bool",
+			env: map[string]string{
+				"TRACING_ENABLED": "sometimes",
+			},
+		},
+		{
+			name: "tracing insecure is not a bool",
+			env: map[string]string{
+				"TRACING_INSECURE": "sometimes",
+			},
+		},
+		{
+			name: "tracing enabled without endpoint",
+			env: map[string]string{
+				"TRACING_ENABLED":       "true",
+				"TRACING_OTLP_ENDPOINT": "   ",
 			},
 		},
 	}

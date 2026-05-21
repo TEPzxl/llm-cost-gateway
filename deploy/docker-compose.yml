@@ -86,6 +86,10 @@ services:
       CLICKHOUSE_DATABASE: llmgw
       CLICKHOUSE_USERNAME: llmgw
       CLICKHOUSE_PASSWORD: llmgw
+      TRACING_ENABLED: "false"
+      TRACING_OTLP_ENDPOINT: otel-collector:4318
+      TRACING_INSECURE: "true"
+      TRACING_SERVICE_NAME: llm-cost-gateway
     ports:
       - "8080:8080"
     depends_on:
