@@ -25,6 +25,23 @@ services:
       timeout: 5s
       retries: 20
 
+  kafka:
+    image: bitnami/kafka:3.7
+    profiles: ["events"]
+    environment:
+      KAFKA_ENABLE_KRAFT: "yes"
+      KAFKA_CFG_NODE_ID: "1"
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    ports:
+      - "9092:9092"
+
   gateway:
     build:
       context: .
@@ -42,6 +59,9 @@ services:
       LOG_LEVEL: info
       MAX_RETRIES: "1"
       RETRY_BACKOFF_MS: "100"
+      KAFKA_ENABLED: "false"
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_USAGE_TOPIC: llm-usage-events
     ports:
       - "8080:8080"
     depends_on:

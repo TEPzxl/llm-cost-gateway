@@ -3,11 +3,13 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/tep/llm-cost-gateway/internal/config"
+	"github.com/tep/llm-cost-gateway/internal/events"
 	"github.com/tep/llm-cost-gateway/internal/http/middleware"
 	"github.com/tep/llm-cost-gateway/internal/observability"
 	"github.com/tep/llm-cost-gateway/internal/ratelimit"
@@ -21,6 +23,7 @@ type App struct {
 	server *http.Server
 	store  *store.Store
 	redis  *redis.Client
+	events io.Closer
 }
 
 type Config = config.Config
@@ -36,14 +39,21 @@ func New(ctx context.Context, cfg Config, logger *zap.Logger) (*App, error) {
 		return nil, fmt.Errorf("open redis: %w", err)
 	}
 
-	return newWithDependencies(cfg, logger, st, redisClient, ratelimit.NewRedisLimiter(redisClient)), nil
+	publisher, publisherCloser, err := newUsageEventPublisher(cfg)
+	if err != nil {
+		_ = redisClient.Close()
+		st.Close()
+		return nil, fmt.Errorf("init usage event publisher: %w", err)
+	}
+
+	return newWithDependencies(cfg, logger, st, redisClient, ratelimit.NewRedisLimiter(redisClient), publisher, publisherCloser), nil
 }
 
 func NewWithStore(cfg Config, logger *zap.Logger, st *store.Store) *App {
-	return newWithDependencies(cfg, logger, st, nil, nil)
+	return newWithDependencies(cfg, logger, st, nil, nil, events.DisabledPublisher{}, nil)
 }
 
-func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisClient *redis.Client, limiter middleware.RateLimiter) *App {
+func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisClient *redis.Client, limiter middleware.RateLimiter, usageEventPublisher events.Publisher, usageEventCloser io.Closer) *App {
 	router := NewRouter(RouterConfig{
 		AppEnv:                 cfg.AppEnv,
 		PlatformBootstrapToken: cfg.PlatformBootstrapToken,
@@ -54,6 +64,7 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 		Store:                  st,
 		RateLimiter:            limiter,
 		Metrics:                observability.NewMetrics(),
+		UsageEventPublisher:    usageEventPublisher,
 	}, logger)
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.ServerPort),
@@ -67,7 +78,22 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 		server: server,
 		store:  st,
 		redis:  redisClient,
+		events: usageEventCloser,
 	}
+}
+
+func newUsageEventPublisher(cfg Config) (events.Publisher, io.Closer, error) {
+	if !cfg.KafkaEnabled {
+		return events.DisabledPublisher{}, nil, nil
+	}
+	producer, err := events.NewKafkaProducer(events.KafkaProducerConfig{
+		Brokers: cfg.KafkaBrokers,
+		Topic:   cfg.KafkaUsageTopic,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return producer, producer, nil
 }
 
 func (a *App) Run() error {
@@ -82,6 +108,9 @@ func (a *App) Shutdown(ctx context.Context) error {
 	}
 	if a.redis != nil {
 		_ = a.redis.Close()
+	}
+	if a.events != nil {
+		_ = a.events.Close()
 	}
 	return err
 }

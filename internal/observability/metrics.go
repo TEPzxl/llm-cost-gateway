@@ -19,6 +19,7 @@ type Metrics struct {
 	costMicroUSD     *prometheus.CounterVec
 	rateLimited      prometheus.Counter
 	budgetBlocked    prometheus.Counter
+	eventPublishFail prometheus.Counter
 }
 
 func NewMetrics() *Metrics {
@@ -57,6 +58,10 @@ func NewMetrics() *Metrics {
 			Name: "llmgw_budget_blocked_total",
 			Help: "Total budget-blocked Gateway requests.",
 		}),
+		eventPublishFail: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "llmgw_usage_event_publish_failed_total",
+			Help: "Total failed usage event publish attempts.",
+		}),
 	}
 	m.registry.MustRegister(
 		m.requests,
@@ -67,6 +72,7 @@ func NewMetrics() *Metrics {
 		m.costMicroUSD,
 		m.rateLimited,
 		m.budgetBlocked,
+		m.eventPublishFail,
 	)
 	m.requests.WithLabelValues("", "", "").Add(0)
 	m.requestDuration.WithLabelValues("", "", "").Observe(0)
@@ -127,4 +133,11 @@ func (m *Metrics) IncBudgetBlocked() {
 		return
 	}
 	m.budgetBlocked.Inc()
+}
+
+func (m *Metrics) IncUsageEventPublishFailed() {
+	if m == nil {
+		return
+	}
+	m.eventPublishFail.Inc()
 }

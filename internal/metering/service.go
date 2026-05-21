@@ -11,8 +11,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/tep/llm-cost-gateway/internal/costing"
+	"github.com/tep/llm-cost-gateway/internal/events"
+	"github.com/tep/llm-cost-gateway/internal/observability"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
+	"go.uber.org/zap"
 )
 
 const (
@@ -29,6 +32,33 @@ type Service struct {
 	store      *store.Store
 	calculator *costing.Calculator
 	now        func() time.Time
+	publisher  events.Publisher
+	logger     *zap.Logger
+	metrics    *observability.Metrics
+}
+
+type Option func(*Service)
+
+func WithUsageEventPublisher(publisher events.Publisher) Option {
+	return func(s *Service) {
+		if publisher != nil {
+			s.publisher = publisher
+		}
+	}
+}
+
+func WithLogger(logger *zap.Logger) Option {
+	return func(s *Service) {
+		if logger != nil {
+			s.logger = logger
+		}
+	}
+}
+
+func WithMetrics(metrics *observability.Metrics) Option {
+	return func(s *Service) {
+		s.metrics = metrics
+	}
 }
 
 type RecordSuccessInput struct {
@@ -85,15 +115,21 @@ type RecordSuccessResult struct {
 	CostRecord  db.CostRecord
 }
 
-func NewService(st *store.Store, calculator *costing.Calculator) *Service {
+func NewService(st *store.Store, calculator *costing.Calculator, opts ...Option) *Service {
 	if calculator == nil {
 		calculator = costing.NewCalculator()
 	}
-	return &Service{
+	service := &Service{
 		store:      st,
 		calculator: calculator,
 		now:        func() time.Time { return time.Now().UTC() },
+		publisher:  events.DisabledPublisher{},
+		logger:     zap.NewNop(),
 	}
+	for _, opt := range opts {
+		opt(service)
+	}
+	return service
 }
 
 func (s *Service) RecordSuccess(ctx context.Context, input RecordSuccessInput) (RecordSuccessResult, error) {

@@ -6,6 +6,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/auth"
 	"github.com/tep/llm-cost-gateway/internal/budget"
 	"github.com/tep/llm-cost-gateway/internal/costing"
+	"github.com/tep/llm-cost-gateway/internal/events"
 	gatewayservice "github.com/tep/llm-cost-gateway/internal/gateway"
 	"github.com/tep/llm-cost-gateway/internal/http/handlers/admin"
 	gatewayhandler "github.com/tep/llm-cost-gateway/internal/http/handlers/gateway"
@@ -30,10 +31,16 @@ type RouterConfig struct {
 	Store                  *store.Store
 	RateLimiter            middleware.RateLimiter
 	Metrics                *observability.Metrics
+	UsageEventPublisher    events.Publisher
+	Logger                 *zap.Logger
 }
 
 func NewRouter(cfg RouterConfig, logger *zap.Logger) *gin.Engine {
 	gin.SetMode(ginMode(cfg.AppEnv))
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	cfg.Logger = logger
 
 	router := gin.New()
 	router.Use(middleware.RequestID())
@@ -67,6 +74,8 @@ func registerGatewayRoutes(router *gin.Engine, cfg RouterConfig) {
 		cfg.SecretEncryptionKey,
 		cfg.Metrics,
 		gatewayservice.NewRetryPolicy(cfg.MaxRetries, cfg.RetryBackoffMS),
+		gatewayservice.WithUsageEventPublisher(cfg.UsageEventPublisher),
+		gatewayservice.WithLogger(cfg.Logger),
 	)
 	chatHandler := gatewayhandler.NewChatCompletionsHandler(chatService)
 

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -13,16 +14,19 @@ import (
 const aes256KeyLength = 32
 
 type Config struct {
-	AppEnv                 string `yaml:"app_env"`
-	ServerPort             int    `yaml:"server_port"`
-	DatabaseURL            string `yaml:"database_url"`
-	RedisURL               string `yaml:"redis_url"`
-	PlatformBootstrapToken string `yaml:"platform_bootstrap_token"`
-	TokenHashSecret        string `yaml:"token_hash_secret"`
-	SecretEncryptionKey    string `yaml:"secret_encryption_key"`
-	LogLevel               string `yaml:"log_level"`
-	MaxRetries             int    `yaml:"max_retries"`
-	RetryBackoffMS         int    `yaml:"retry_backoff_ms"`
+	AppEnv                 string   `yaml:"app_env"`
+	ServerPort             int      `yaml:"server_port"`
+	DatabaseURL            string   `yaml:"database_url"`
+	RedisURL               string   `yaml:"redis_url"`
+	PlatformBootstrapToken string   `yaml:"platform_bootstrap_token"`
+	TokenHashSecret        string   `yaml:"token_hash_secret"`
+	SecretEncryptionKey    string   `yaml:"secret_encryption_key"`
+	LogLevel               string   `yaml:"log_level"`
+	MaxRetries             int      `yaml:"max_retries"`
+	RetryBackoffMS         int      `yaml:"retry_backoff_ms"`
+	KafkaEnabled           bool     `yaml:"kafka_enabled"`
+	KafkaBrokers           []string `yaml:"kafka_brokers"`
+	KafkaUsageTopic        string   `yaml:"kafka_usage_topic"`
 }
 
 func Load(path string) (Config, error) {
@@ -81,18 +85,27 @@ func (c Config) Validate() error {
 	if c.RetryBackoffMS <= 0 {
 		return fmt.Errorf("RETRY_BACKOFF_MS must be greater than 0")
 	}
+	if c.KafkaEnabled && len(c.KafkaBrokers) == 0 {
+		return fmt.Errorf("KAFKA_BROKERS is required when Kafka is enabled")
+	}
+	if c.KafkaEnabled && c.KafkaUsageTopic == "" {
+		return fmt.Errorf("KAFKA_USAGE_TOPIC is required when Kafka is enabled")
+	}
 	return nil
 }
 
 func defaultConfig() Config {
 	return Config{
-		AppEnv:         "development",
-		ServerPort:     8080,
-		DatabaseURL:    "postgres://llmgw:llmgw@localhost:5432/llmgw?sslmode=disable",
-		RedisURL:       "redis://localhost:6379/0",
-		LogLevel:       "info",
-		MaxRetries:     1,
-		RetryBackoffMS: 100,
+		AppEnv:          "development",
+		ServerPort:      8080,
+		DatabaseURL:     "postgres://llmgw:llmgw@localhost:5432/llmgw?sslmode=disable",
+		RedisURL:        "redis://localhost:6379/0",
+		LogLevel:        "info",
+		MaxRetries:      1,
+		RetryBackoffMS:  100,
+		KafkaEnabled:    false,
+		KafkaBrokers:    []string{},
+		KafkaUsageTopic: "llm-usage-events",
 	}
 }
 
@@ -137,6 +150,17 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.RetryBackoffMS = retryBackoffMS
 	}
+	if value := os.Getenv("KAFKA_ENABLED"); value != "" {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("parse KAFKA_ENABLED: %w", err)
+		}
+		cfg.KafkaEnabled = enabled
+	}
+	if value := os.Getenv("KAFKA_BROKERS"); value != "" {
+		cfg.KafkaBrokers = splitCSV(value)
+	}
+	setStringFromEnv("KAFKA_USAGE_TOPIC", &cfg.KafkaUsageTopic)
 	return nil
 }
 
@@ -144,6 +168,18 @@ func setStringFromEnv(name string, target *string) {
 	if value := os.Getenv(name); value != "" {
 		*target = value
 	}
+}
+
+func splitCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
 }
 
 func validAppEnv(value string) bool {

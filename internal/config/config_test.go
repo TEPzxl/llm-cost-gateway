@@ -38,12 +38,24 @@ func TestLoadUsesDefaultsAndEnvironment(t *testing.T) {
 	if cfg.RetryBackoffMS != 100 {
 		t.Fatalf("RetryBackoffMS = %d, want 100", cfg.RetryBackoffMS)
 	}
+	if cfg.KafkaEnabled {
+		t.Fatal("KafkaEnabled = true, want false")
+	}
+	if len(cfg.KafkaBrokers) != 0 {
+		t.Fatalf("KafkaBrokers = %v, want empty", cfg.KafkaBrokers)
+	}
+	if cfg.KafkaUsageTopic != "llm-usage-events" {
+		t.Fatalf("KafkaUsageTopic = %q, want llm-usage-events", cfg.KafkaUsageTopic)
+	}
 }
 
 func TestLoadReadsConfigFileAndEnvironmentOverrides(t *testing.T) {
 	t.Setenv("SERVER_PORT", "9091")
 	t.Setenv("MAX_RETRIES", "3")
 	t.Setenv("RETRY_BACKOFF_MS", "250")
+	t.Setenv("KAFKA_ENABLED", "true")
+	t.Setenv("KAFKA_BROKERS", " kafka-1:9092, kafka-2:9092 ")
+	t.Setenv("KAFKA_USAGE_TOPIC", "env-usage-events")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	content := []byte(`
@@ -57,6 +69,10 @@ secret_encryption_key: 0123456789abcdef0123456789abcdef
 log_level: debug
 max_retries: 2
 retry_backoff_ms: 125
+kafka_enabled: false
+kafka_brokers:
+  - file-kafka:9092
+kafka_usage_topic: file-usage-events
 `)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
@@ -84,6 +100,21 @@ retry_backoff_ms: 125
 	}
 	if cfg.RetryBackoffMS != 250 {
 		t.Fatalf("RetryBackoffMS = %d, want environment override 250", cfg.RetryBackoffMS)
+	}
+	if !cfg.KafkaEnabled {
+		t.Fatal("KafkaEnabled = false, want environment override true")
+	}
+	wantBrokers := []string{"kafka-1:9092", "kafka-2:9092"}
+	if len(cfg.KafkaBrokers) != len(wantBrokers) {
+		t.Fatalf("KafkaBrokers = %v, want %v", cfg.KafkaBrokers, wantBrokers)
+	}
+	for index, want := range wantBrokers {
+		if cfg.KafkaBrokers[index] != want {
+			t.Fatalf("KafkaBrokers[%d] = %q, want %q", index, cfg.KafkaBrokers[index], want)
+		}
+	}
+	if cfg.KafkaUsageTopic != "env-usage-events" {
+		t.Fatalf("KafkaUsageTopic = %q, want env-usage-events", cfg.KafkaUsageTopic)
 	}
 }
 
@@ -174,6 +205,18 @@ func TestLoadRejectsInvalidBoundaryValues(t *testing.T) {
 				"RETRY_BACKOFF_MS": "0",
 			},
 		},
+		{
+			name: "kafka enabled is not a bool",
+			env: map[string]string{
+				"KAFKA_ENABLED": "maybe",
+			},
+		},
+		{
+			name: "kafka enabled without brokers",
+			env: map[string]string{
+				"KAFKA_ENABLED": "true",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -190,6 +233,26 @@ func TestLoadRejectsInvalidBoundaryValues(t *testing.T) {
 				t.Fatal("Load returned nil error, want validation error")
 			}
 		})
+	}
+}
+
+func TestLoadRejectsKafkaEnabledWithoutTopic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`
+platform_bootstrap_token: bootstrap-token
+token_hash_secret: token-hash-secret
+secret_encryption_key: 0123456789abcdef0123456789abcdef
+kafka_enabled: true
+kafka_brokers:
+  - kafka:9092
+kafka_usage_topic: ""
+`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load returned nil error, want missing Kafka topic error")
 	}
 }
 

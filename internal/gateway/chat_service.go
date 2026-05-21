@@ -16,6 +16,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/costing"
 	secretcrypto "github.com/tep/llm-cost-gateway/internal/crypto"
 	"github.com/tep/llm-cost-gateway/internal/domain"
+	"github.com/tep/llm-cost-gateway/internal/events"
 	"github.com/tep/llm-cost-gateway/internal/metering"
 	"github.com/tep/llm-cost-gateway/internal/observability"
 	"github.com/tep/llm-cost-gateway/internal/provider"
@@ -23,6 +24,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/routing"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
+	"go.uber.org/zap"
 )
 
 type ChatService struct {
@@ -37,6 +39,26 @@ type ChatService struct {
 	retryPolicy         RetryPolicy
 	secretEncryptionKey string
 	clock               func() time.Time
+	usageEvents         events.Publisher
+	logger              *zap.Logger
+}
+
+type ChatServiceOption func(*ChatService)
+
+func WithUsageEventPublisher(publisher events.Publisher) ChatServiceOption {
+	return func(s *ChatService) {
+		if publisher != nil {
+			s.usageEvents = publisher
+		}
+	}
+}
+
+func WithLogger(logger *zap.Logger) ChatServiceOption {
+	return func(s *ChatService) {
+		if logger != nil {
+			s.logger = logger
+		}
+	}
 }
 
 type ChatInput struct {
@@ -104,8 +126,8 @@ type providerAttemptMetadata struct {
 	Attempts   int       `json:"attempts"`
 }
 
-func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observability.Metrics, retryPolicy RetryPolicy) *ChatService {
-	return &ChatService{
+func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observability.Metrics, retryPolicy RetryPolicy, opts ...ChatServiceOption) *ChatService {
+	service := &ChatService{
 		store:               st,
 		resolver:            routing.NewResolver(st.Queries),
 		registry:            provider.NewRegistry(),
@@ -117,7 +139,20 @@ func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observ
 		retryPolicy:         retryPolicy.Normalize(),
 		secretEncryptionKey: secretEncryptionKey,
 		clock:               func() time.Time { return time.Now().UTC() },
+		usageEvents:         events.DisabledPublisher{},
+		logger:              zap.NewNop(),
 	}
+	for _, opt := range opts {
+		opt(service)
+	}
+	service.metering = metering.NewService(
+		st,
+		costing.NewCalculator(),
+		metering.WithUsageEventPublisher(service.usageEvents),
+		metering.WithLogger(service.logger),
+		metering.WithMetrics(metrics),
+	)
+	return service
 }
 
 func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, error) {
