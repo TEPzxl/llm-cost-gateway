@@ -38,6 +38,7 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 		s.metrics.ObserveGatewayRequest("error", "", request.Model, s.clock().Sub(startedAt))
 		return nil, domain.NewError(http.StatusBadRequest, domain.CodeInvalidRequest, "model and messages are required")
 	}
+	s.recordPromptCacheSkip(ctx, input, request, "stream")
 
 	budgetCheck, err := s.budgets.Check(ctx, input.Principal.OrgID)
 	if err != nil {

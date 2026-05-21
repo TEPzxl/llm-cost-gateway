@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/tep/llm-cost-gateway/internal/auth"
+	promptcache "github.com/tep/llm-cost-gateway/internal/cache"
 	"github.com/tep/llm-cost-gateway/internal/observability"
 	"github.com/tep/llm-cost-gateway/internal/ratelimit"
 	"github.com/tep/llm-cost-gateway/internal/store"
@@ -626,6 +627,84 @@ func TestGatewayChatCompletionsUsesLatestPricingVersionAndPreservesHistory(t *te
 	}
 }
 
+func TestGatewayChatCompletionsExactCacheHitSkipsProvider(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouterWithPromptCache(t)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		writeAppOpenAIChatResponse(t, w)
+	}))
+	defer server.Close()
+
+	provider, model := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "cache-chat", server.URL, 1000)
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "cache-chat-policy",
+		MatchModel: "cache-chat",
+		Strategy:   "single",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: provider.ID, ModelID: model.ID, Priority: 1, Weight: 100},
+		},
+	})
+	body := `{"model":"cache-chat","messages":[{"role":"user","content":"cache me"}],"temperature":0.1}`
+
+	first := decodeGatewayChatResponse(t, performChatCompletion(t, router, apiKey.Key, body))
+	if first.Cost.TotalCostMicro != 5 {
+		t.Fatalf("first cost = %d, want 5", first.Cost.TotalCostMicro)
+	}
+	second := decodeGatewayChatResponse(t, performChatCompletion(t, router, apiKey.Key, body))
+	if second.Cost.TotalCostMicro != 0 {
+		t.Fatalf("second cost = %d, want cache hit cost 0", second.Cost.TotalCostMicro)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("provider calls = %d, want 1", got)
+	}
+	assertAppTableCount(t, ctx, st, "request_logs", 2)
+	assertAppTableCount(t, ctx, st, "usage_records", 1)
+	assertAppTableCount(t, ctx, st, "cost_records", 1)
+	assertAppCacheEventCount(t, ctx, st, "miss", 1)
+	assertAppCacheEventCount(t, ctx, st, "store", 1)
+	assertAppCacheEventCount(t, ctx, st, "hit", 1)
+	assertAppLatestRequestLogCacheStatus(t, ctx, st, "hit")
+}
+
+func TestGatewayChatCompletionsExactCacheTemperatureMiss(t *testing.T) {
+	router, _, apiKey := newGatewayChatTestRouterWithPromptCache(t)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		writeAppOpenAIChatResponse(t, w)
+	}))
+	defer server.Close()
+
+	provider, model := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "cache-temp", server.URL, 1000)
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "cache-temp-policy",
+		MatchModel: "cache-temp",
+		Strategy:   "single",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: provider.ID, ModelID: model.ID, Priority: 1, Weight: 100},
+		},
+	})
+
+	_ = decodeGatewayChatResponse(t, performChatCompletion(t, router, apiKey.Key, `{"model":"cache-temp","messages":[{"role":"user","content":"cache me"}],"temperature":0.1}`))
+	_ = decodeGatewayChatResponse(t, performChatCompletion(t, router, apiKey.Key, `{"model":"cache-temp","messages":[{"role":"user","content":"cache me"}],"temperature":0.2}`))
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("provider calls = %d, want 2 for different temperature", got)
+	}
+}
+
+func TestGatewayChatCompletionsStreamSkipsExactCache(t *testing.T) {
+	ctx := context.Background()
+	router, st, apiKey := newGatewayChatTestRouterWithPromptCache(t)
+
+	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"fast-chat","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("stream status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	assertAppCacheEventCount(t, ctx, st, "skip", 1)
+}
+
 type fakeGatewayLimiter struct {
 	decision ratelimit.Decision
 	err      error
@@ -646,7 +725,20 @@ func newGatewayChatTestRouter(t *testing.T, limiter fakeGatewayLimiter) (*gin.En
 	return newGatewayChatTestRouterWithMetrics(t, limiter, nil)
 }
 
+func newGatewayChatTestRouterWithPromptCache(t *testing.T) (*gin.Engine, *store.Store, gatewayChatFixture) {
+	t.Helper()
+
+	ctx := context.Background()
+	redisClient := testutil.OpenRedis(t, ctx)
+	promptCache := promptcache.NewPromptCache(redisClient, time.Minute)
+	return newGatewayChatTestRouterWithOptions(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}}, nil, promptCache)
+}
+
 func newGatewayChatTestRouterWithMetrics(t *testing.T, limiter fakeGatewayLimiter, metrics *observability.Metrics) (*gin.Engine, *store.Store, gatewayChatFixture) {
+	return newGatewayChatTestRouterWithOptions(t, limiter, metrics, nil)
+}
+
+func newGatewayChatTestRouterWithOptions(t *testing.T, limiter fakeGatewayLimiter, metrics *observability.Metrics, promptCache *promptcache.PromptCache) (*gin.Engine, *store.Store, gatewayChatFixture) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -664,6 +756,7 @@ func newGatewayChatTestRouterWithMetrics(t *testing.T, limiter fakeGatewayLimite
 		Store:                  st,
 		RateLimiter:            limiter,
 		Metrics:                metrics,
+		PromptCache:            promptCache,
 	}, zap.NewNop())
 
 	orgID := createOrgViaHTTP(t, router, "Gateway Org", "gateway-org-"+uuid.NewString())
@@ -875,6 +968,35 @@ func assertAppRequestLogAPIKeyQuota(t *testing.T, ctx context.Context, st *store
 	if period != wantPeriod || action != wantAction || exceeded != wantExceeded {
 		t.Fatalf("api_key_quota metadata = period:%q action:%q exceeded:%t, want period:%q action:%q exceeded:%t",
 			period, action, exceeded, wantPeriod, wantAction, wantExceeded)
+	}
+}
+
+func assertAppCacheEventCount(t *testing.T, ctx context.Context, st *store.Store, eventType string, want int) {
+	t.Helper()
+
+	var got int
+	if err := st.Pool.QueryRow(ctx, `SELECT count(*)::int FROM cache_events WHERE event_type = $1`, eventType).Scan(&got); err != nil {
+		t.Fatalf("count cache_events %s: %v", eventType, err)
+	}
+	if got != want {
+		t.Fatalf("cache_events %s count = %d, want %d", eventType, got, want)
+	}
+}
+
+func assertAppLatestRequestLogCacheStatus(t *testing.T, ctx context.Context, st *store.Store, want string) {
+	t.Helper()
+
+	var got string
+	if err := st.Pool.QueryRow(ctx, `
+		SELECT metadata->'cache'->>'status'
+		FROM request_logs
+		ORDER BY started_at DESC
+		LIMIT 1
+	`).Scan(&got); err != nil {
+		t.Fatalf("select latest request log cache metadata: %v", err)
+	}
+	if got != want {
+		t.Fatalf("cache metadata status = %q, want %q", got, want)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/tep/llm-cost-gateway/internal/analytics"
+	promptcache "github.com/tep/llm-cost-gateway/internal/cache"
 	"github.com/tep/llm-cost-gateway/internal/config"
 	"github.com/tep/llm-cost-gateway/internal/events"
 	"github.com/tep/llm-cost-gateway/internal/http/middleware"
@@ -76,6 +77,7 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 		Metrics:                observability.NewMetrics(),
 		UsageEventPublisher:    usageEventPublisher,
 		UsageAnalytics:         usageAnalytics,
+		PromptCache:            newPromptCache(cfg, redisClient),
 	}, logger)
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.ServerPort),
@@ -91,6 +93,13 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 		redis:  redisClient,
 		events: multiCloser(usageEventCloser, analyticsCloser),
 	}
+}
+
+func newPromptCache(cfg Config, redisClient redis.Cmdable) *promptcache.PromptCache {
+	if !cfg.PromptCacheEnabled || redisClient == nil {
+		return nil
+	}
+	return promptcache.NewPromptCache(redisClient, time.Duration(cfg.PromptCacheTTLSeconds)*time.Second)
 }
 
 func newUsageEventPublisher(cfg Config) (events.Publisher, io.Closer, error) {

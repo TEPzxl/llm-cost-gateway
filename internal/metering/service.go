@@ -120,6 +120,27 @@ type RecordFailureInput struct {
 	CompletedAt       time.Time
 }
 
+type RecordCacheHitInput struct {
+	RequestID         uuid.UUID
+	OrgID             uuid.UUID
+	APIKeyID          uuid.UUID
+	ProviderID        uuid.UUID
+	ModelID           uuid.UUID
+	RoutePolicyID     *uuid.UUID
+	Method            string
+	Path              string
+	RequestModel      string
+	Status            string
+	StatusCode        int32
+	RequestHash       string
+	ResponseHash      string
+	LatencyMS         int32
+	ProviderLatencyMS *int32
+	Metadata          *json.RawMessage
+	StartedAt         time.Time
+	CompletedAt       time.Time
+}
+
 type RecordSuccessResult struct {
 	RequestLog  db.RequestLog
 	UsageRecord db.UsageRecord
@@ -336,6 +357,50 @@ func (s *Service) RecordFailure(ctx context.Context, input RecordFailureInput) (
 	return requestLog, nil
 }
 
+func (s *Service) RecordCacheHit(ctx context.Context, input RecordCacheHitInput) (db.RequestLog, error) {
+	if err := validateCacheHitInput(input); err != nil {
+		return db.RequestLog{}, err
+	}
+	requestLog, err := s.store.Queries.InsertRequestLog(ctx, db.InsertRequestLogParams{
+		ID:                input.RequestID,
+		OrgID:             input.OrgID,
+		ApiKeyID:          &input.APIKeyID,
+		ProviderID:        &input.ProviderID,
+		ModelID:           &input.ModelID,
+		RoutePolicyID:     input.RoutePolicyID,
+		Method:            input.Method,
+		Path:              input.Path,
+		RequestModel:      textValue(input.RequestModel),
+		Status:            successStatus(input.Status),
+		StatusCode:        input.StatusCode,
+		RequestHash:       textValue(input.RequestHash),
+		ResponseHash:      textValue(input.ResponseHash),
+		LatencyMs:         input.LatencyMS,
+		ProviderLatencyMs: int4Value(input.ProviderLatencyMS),
+		Metadata:          input.Metadata,
+		StartedAt:         nonZeroTime(input.StartedAt, s.now()),
+		CompletedAt:       nonZeroTime(input.CompletedAt, s.now()),
+	})
+	if err != nil {
+		return db.RequestLog{}, err
+	}
+	s.writeAnalyticsRecord(ctx, analytics.UsageRecord{
+		RequestID:         requestLog.ID,
+		OrgID:             input.OrgID,
+		APIKeyID:          uuidPtr(input.APIKeyID),
+		ProviderID:        uuidPtr(input.ProviderID),
+		ModelID:           uuidPtr(input.ModelID),
+		Status:            requestLog.Status,
+		PromptTokens:      0,
+		CompletionTokens:  0,
+		TotalTokens:       0,
+		TotalCostMicroUSD: 0,
+		LatencyMS:         requestLog.LatencyMs,
+		CreatedAt:         requestLog.CompletedAt,
+	})
+	return requestLog, nil
+}
+
 func (s *Service) publishUsageEvent(ctx context.Context, event events.UsageEvent) {
 	if s.publisher == nil {
 		return
@@ -422,6 +487,28 @@ func validateFailureInput(input RecordFailureInput) error {
 	}
 	if !validFailureStatus(input.Status) {
 		return fmt.Errorf("%w: invalid failure status", ErrInvalidMeteringInput)
+	}
+	if input.StatusCode < 100 || input.StatusCode > 599 {
+		return fmt.Errorf("%w: status_code must be valid HTTP status", ErrInvalidMeteringInput)
+	}
+	if input.LatencyMS < 0 {
+		return fmt.Errorf("%w: latency_ms must be non-negative", ErrInvalidMeteringInput)
+	}
+	return nil
+}
+
+func validateCacheHitInput(input RecordCacheHitInput) error {
+	if input.RequestID == uuid.Nil {
+		return fmt.Errorf("%w: request_id is required", ErrInvalidMeteringInput)
+	}
+	if input.OrgID == uuid.Nil || input.APIKeyID == uuid.Nil || input.ProviderID == uuid.Nil || input.ModelID == uuid.Nil {
+		return fmt.Errorf("%w: org_id, api_key_id, provider_id and model_id are required", ErrInvalidMeteringInput)
+	}
+	if input.Method == "" || input.Path == "" {
+		return fmt.Errorf("%w: method and path are required", ErrInvalidMeteringInput)
+	}
+	if input.Status != "" && input.Status != StatusSuccess && input.Status != StatusBudgetWarned {
+		return fmt.Errorf("%w: invalid cache hit status", ErrInvalidMeteringInput)
 	}
 	if input.StatusCode < 100 || input.StatusCode > 599 {
 		return fmt.Errorf("%w: status_code must be valid HTTP status", ErrInvalidMeteringInput)

@@ -12,9 +12,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/tep/llm-cost-gateway/internal/analytics"
 	"github.com/tep/llm-cost-gateway/internal/auth"
 	"github.com/tep/llm-cost-gateway/internal/budget"
+	promptcache "github.com/tep/llm-cost-gateway/internal/cache"
 	"github.com/tep/llm-cost-gateway/internal/costing"
 	secretcrypto "github.com/tep/llm-cost-gateway/internal/crypto"
 	"github.com/tep/llm-cost-gateway/internal/domain"
@@ -43,6 +45,7 @@ type ChatService struct {
 	clock               func() time.Time
 	usageEvents         events.Publisher
 	usageAnalytics      analytics.Sink
+	promptCache         *promptcache.PromptCache
 	logger              *zap.Logger
 }
 
@@ -69,6 +72,12 @@ func WithUsageAnalyticsSink(sink analytics.Sink) ChatServiceOption {
 		if sink != nil {
 			s.usageAnalytics = sink
 		}
+	}
+}
+
+func WithPromptCache(cache *promptcache.PromptCache) ChatServiceOption {
+	return func(s *ChatService) {
+		s.promptCache = cache
 	}
 }
 
@@ -135,6 +144,15 @@ type providerAttemptMetadata struct {
 	ErrorCode  string    `json:"error_code,omitempty"`
 	Retryable  bool      `json:"retryable,omitempty"`
 	Attempts   int       `json:"attempts"`
+}
+
+type cacheEventInput struct {
+	OrgID          uuid.UUID
+	RequestLogID   *uuid.UUID
+	EventType      string
+	RequestedModel string
+	CacheKey       promptcache.PromptKey
+	Reason         string
 }
 
 func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observability.Metrics, retryPolicy RetryPolicy, opts ...ChatServiceOption) *ChatService {
@@ -223,6 +241,28 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	}
 
 	includeFallbackMetadata := resolved.RoutePolicy.Strategy == routing.StrategyFallback
+	cacheKey, cacheable := s.promptCacheKey(request, input.Principal.OrgID)
+	if cacheable {
+		if cached, err := s.promptCache.Get(ctx, cacheKey); err == nil {
+			return s.respondFromPromptCache(ctx, input, request, resolved, cached, cacheKey, budgetCheck, quotaCheck, startedAt)
+		} else if errors.Is(err, promptcache.ErrCacheMiss) {
+			s.recordCacheEvent(ctx, cacheEventInput{
+				OrgID:          input.Principal.OrgID,
+				EventType:      "miss",
+				RequestedModel: request.Model,
+				CacheKey:       cacheKey,
+			})
+		} else {
+			s.recordCacheEvent(ctx, cacheEventInput{
+				OrgID:          input.Principal.OrgID,
+				EventType:      "read_error",
+				RequestedModel: request.Model,
+				CacheKey:       cacheKey,
+				Reason:         "redis_error",
+			})
+			s.logger.Warn("prompt cache read failed", zap.Error(err), zap.String("request_id", input.RequestID.String()))
+		}
+	}
 	var attempts []providerAttemptMetadata
 	var selected routing.ResolvedTarget
 	var providerStarted time.Time
@@ -338,6 +378,36 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	if err != nil {
 		return ChatResult{}, err
 	}
+	if cacheable {
+		cached := promptcache.CachedChatResponse{
+			ProviderID:    selected.Provider.ID,
+			ModelID:       selected.Model.ID,
+			ProviderName:  selected.Provider.Name,
+			ProviderModel: selected.Model.ProviderModelName,
+			Role:          providerResponse.Role,
+			Content:       providerResponse.Content,
+			FinishReason:  providerResponse.FinishReason,
+		}
+		if err := s.promptCache.Set(ctx, cacheKey, cached); err != nil {
+			s.recordCacheEvent(ctx, cacheEventInput{
+				OrgID:          input.Principal.OrgID,
+				RequestLogID:   &metered.RequestLog.ID,
+				EventType:      "write_error",
+				RequestedModel: request.Model,
+				CacheKey:       cacheKey,
+				Reason:         "redis_error",
+			})
+			s.logger.Warn("prompt cache write failed", zap.Error(err), zap.String("request_id", input.RequestID.String()))
+		} else {
+			s.recordCacheEvent(ctx, cacheEventInput{
+				OrgID:          input.Principal.OrgID,
+				RequestLogID:   &metered.RequestLog.ID,
+				EventType:      "store",
+				RequestedModel: request.Model,
+				CacheKey:       cacheKey,
+			})
+		}
+	}
 	_, _ = s.alerts.CheckAndDeliver(ctx, input.Principal.OrgID)
 	statusLabel := "success"
 	if budgetCheck.Warning {
@@ -381,6 +451,120 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	return ChatResult{Response: response}, nil
 }
 
+func (s *ChatService) respondFromPromptCache(ctx context.Context, input ChatInput, request ChatCompletionRequest, resolved routing.ResolveTargetsResult, cached promptcache.CachedChatResponse, cacheKey promptcache.PromptKey, budgetCheck budget.CheckResult, quotaCheck auth.APIKeyQuotaCheckResult, startedAt time.Time) (ChatResult, error) {
+	target := resolved.Targets[0]
+	status := metering.StatusSuccess
+	if budgetCheck.Warning {
+		status = metering.StatusBudgetWarned
+	}
+	metadata := withCacheMetadata(chatMetadata(budgetCheck, quotaCheck, nil, false, false), "hit", cacheKey.CacheKeyHash)
+	requestLog, err := s.metering.RecordCacheHit(ctx, metering.RecordCacheHitInput{
+		RequestID:     input.RequestID,
+		OrgID:         input.Principal.OrgID,
+		APIKeyID:      input.Principal.APIKeyID,
+		ProviderID:    target.Provider.ID,
+		ModelID:       target.Model.ID,
+		RoutePolicyID: &resolved.RoutePolicy.ID,
+		Method:        input.Method,
+		Path:          input.Path,
+		RequestModel:  request.Model,
+		Status:        status,
+		StatusCode:    http.StatusOK,
+		RequestHash:   hashBytes(input.RawBody),
+		ResponseHash:  hashBytes([]byte(cached.Content)),
+		LatencyMS:     int32(s.clock().Sub(startedAt).Milliseconds()),
+		Metadata:      metadata,
+		StartedAt:     startedAt,
+		CompletedAt:   s.clock(),
+	})
+	if err != nil {
+		return ChatResult{}, err
+	}
+	s.recordCacheEvent(ctx, cacheEventInput{
+		OrgID:          input.Principal.OrgID,
+		RequestLogID:   &requestLog.ID,
+		EventType:      "hit",
+		RequestedModel: request.Model,
+		CacheKey:       cacheKey,
+	})
+	statusLabel := "success"
+	if budgetCheck.Warning {
+		statusLabel = metering.StatusBudgetWarned
+	}
+	s.metrics.ObserveGatewayRequest(statusLabel, target.Provider.Name, request.Model, s.clock().Sub(startedAt))
+	return ChatResult{Response: ChatCompletionResponse{
+		ID:      "chatcmpl_" + input.RequestID.String(),
+		Object:  "chat.completion",
+		Created: s.clock().Unix(),
+		Model:   request.Model,
+		Provider: ProviderBody{
+			ID:    target.Provider.ID,
+			Name:  target.Provider.Name,
+			Model: target.Model.ProviderModelName,
+		},
+		Choices: []ChoiceBody{
+			{
+				Index: 0,
+				Message: contract.ChatMessage{
+					Role:    cached.Role,
+					Content: cached.Content,
+				},
+				FinishReason: cached.FinishReason,
+			},
+		},
+		Usage: UsageBody{
+			PromptTokens:     0,
+			CompletionTokens: 0,
+			TotalTokens:      0,
+		},
+		Cost: CostBody{
+			Currency:       "USD",
+			TotalCostMicro: 0,
+		},
+		RequestID: input.RequestID,
+	}}, nil
+}
+
+func (s *ChatService) promptCacheKey(request ChatCompletionRequest, orgID uuid.UUID) (promptcache.PromptKey, bool) {
+	if s.promptCache == nil || request.Stream {
+		return promptcache.PromptKey{}, false
+	}
+	key, err := promptcache.BuildPromptKey(promptcache.PromptKeyInput{
+		OrgID:          orgID,
+		RequestedModel: request.Model,
+		Messages:       request.Messages,
+		Temperature:    request.Temperature,
+		MaxTokens:      request.MaxTokens,
+	})
+	if err != nil {
+		return promptcache.PromptKey{}, false
+	}
+	return key, true
+}
+
+func (s *ChatService) recordPromptCacheSkip(ctx context.Context, input ChatInput, request ChatCompletionRequest, reason string) {
+	if s.promptCache == nil {
+		return
+	}
+	key, err := promptcache.BuildPromptKey(promptcache.PromptKeyInput{
+		OrgID:          input.Principal.OrgID,
+		RequestedModel: request.Model,
+		Messages:       request.Messages,
+		Temperature:    request.Temperature,
+		MaxTokens:      request.MaxTokens,
+	})
+	if err != nil {
+		return
+	}
+	s.recordCacheEvent(ctx, cacheEventInput{
+		OrgID:          input.Principal.OrgID,
+		EventType:      "skip",
+		RequestedModel: request.Model,
+		CacheKey:       key,
+		Reason:         reason,
+	})
+}
+
 func (s *ChatService) recordFailure(ctx context.Context, input ChatInput, requestModel string, status string, statusCode int, errorCode string, responseHash string, providerID *uuid.UUID, modelID *uuid.UUID, metadata *json.RawMessage, startedAt time.Time) error {
 	_, err := s.metering.RecordFailure(ctx, metering.RecordFailureInput{
 		RequestID:    input.RequestID,
@@ -402,6 +586,33 @@ func (s *ChatService) recordFailure(ctx context.Context, input ChatInput, reques
 		CompletedAt:  s.clock(),
 	})
 	return err
+}
+
+func (s *ChatService) recordCacheEvent(ctx context.Context, input cacheEventInput) {
+	if input.OrgID == uuid.Nil || input.CacheKey.CacheKeyHash == "" || input.RequestedModel == "" {
+		return
+	}
+	_, err := s.store.Queries.InsertCacheEvent(ctx, db.InsertCacheEventParams{
+		ID:             uuid.New(),
+		OrgID:          input.OrgID,
+		RequestLogID:   input.RequestLogID,
+		EventType:      input.EventType,
+		RequestedModel: input.RequestedModel,
+		CacheKeyHash:   input.CacheKey.CacheKeyHash,
+		MessagesHash:   input.CacheKey.MessagesHash,
+		Reason:         pgText(input.Reason),
+		CreatedAt:      s.clock(),
+	})
+	if err != nil {
+		s.logger.Warn("record cache event failed", zap.Error(err), zap.String("event_type", input.EventType))
+	}
+}
+
+func pgText(value string) pgtype.Text {
+	if value == "" {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: value, Valid: true}
 }
 
 func estimatePromptTokens(messages []contract.ChatMessage) int64 {
@@ -569,6 +780,23 @@ func chatMetadata(result budget.CheckResult, quotaResult auth.APIKeyQuotaCheckRe
 	rawBody, err := json.Marshal(body)
 	if err != nil {
 		return nil
+	}
+	raw := json.RawMessage(rawBody)
+	return &raw
+}
+
+func withCacheMetadata(existing *json.RawMessage, status string, cacheKeyHash string) *json.RawMessage {
+	body := map[string]any{}
+	if existing != nil && len(*existing) > 0 {
+		_ = json.Unmarshal(*existing, &body)
+	}
+	body["cache"] = map[string]any{
+		"status":         status,
+		"cache_key_hash": cacheKeyHash,
+	}
+	rawBody, err := json.Marshal(body)
+	if err != nil {
+		return existing
 	}
 	raw := json.RawMessage(rawBody)
 	return &raw
