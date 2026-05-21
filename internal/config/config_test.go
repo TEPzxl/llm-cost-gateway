@@ -65,6 +65,15 @@ func TestLoadUsesDefaultsAndEnvironment(t *testing.T) {
 	if cfg.PromptCacheTTLSeconds != 300 {
 		t.Fatalf("PromptCacheTTLSeconds = %d, want 300", cfg.PromptCacheTTLSeconds)
 	}
+	if cfg.SemanticCacheEnabled {
+		t.Fatal("SemanticCacheEnabled = true, want false")
+	}
+	if cfg.SemanticCacheThreshold != 0.92 {
+		t.Fatalf("SemanticCacheThreshold = %f, want 0.92", cfg.SemanticCacheThreshold)
+	}
+	if cfg.SemanticCacheMaxTemp != 0.3 {
+		t.Fatalf("SemanticCacheMaxTemp = %f, want 0.3", cfg.SemanticCacheMaxTemp)
+	}
 }
 
 func TestLoadReadsConfigFileAndEnvironmentOverrides(t *testing.T) {
@@ -81,6 +90,9 @@ func TestLoadReadsConfigFileAndEnvironmentOverrides(t *testing.T) {
 	t.Setenv("CLICKHOUSE_PASSWORD", "env_password")
 	t.Setenv("PROMPT_CACHE_ENABLED", "false")
 	t.Setenv("PROMPT_CACHE_TTL_SECONDS", "60")
+	t.Setenv("SEMANTIC_CACHE_ENABLED", "true")
+	t.Setenv("SEMANTIC_CACHE_THRESHOLD", "0.8")
+	t.Setenv("SEMANTIC_CACHE_MAX_TEMPERATURE", "0.2")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	content := []byte(`
@@ -105,6 +117,9 @@ clickhouse_username: file_user
 clickhouse_password: file_password
 prompt_cache_enabled: true
 prompt_cache_ttl_seconds: 120
+semantic_cache_enabled: false
+semantic_cache_threshold: 0.9
+semantic_cache_max_temperature: 0.4
 `)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
@@ -168,6 +183,15 @@ prompt_cache_ttl_seconds: 120
 	}
 	if cfg.PromptCacheTTLSeconds != 60 {
 		t.Fatalf("PromptCacheTTLSeconds = %d, want environment override 60", cfg.PromptCacheTTLSeconds)
+	}
+	if !cfg.SemanticCacheEnabled {
+		t.Fatal("SemanticCacheEnabled = false, want environment override true")
+	}
+	if cfg.SemanticCacheThreshold != 0.8 {
+		t.Fatalf("SemanticCacheThreshold = %f, want 0.8", cfg.SemanticCacheThreshold)
+	}
+	if cfg.SemanticCacheMaxTemp != 0.2 {
+		t.Fatalf("SemanticCacheMaxTemp = %f, want 0.2", cfg.SemanticCacheMaxTemp)
 	}
 }
 
@@ -299,6 +323,30 @@ func TestLoadRejectsInvalidBoundaryValues(t *testing.T) {
 			name: "prompt cache ttl is zero",
 			env: map[string]string{
 				"PROMPT_CACHE_TTL_SECONDS": "0",
+			},
+		},
+		{
+			name: "semantic cache enabled is not a bool",
+			env: map[string]string{
+				"SEMANTIC_CACHE_ENABLED": "sometimes",
+			},
+		},
+		{
+			name: "semantic cache threshold is not a number",
+			env: map[string]string{
+				"SEMANTIC_CACHE_THRESHOLD": "close",
+			},
+		},
+		{
+			name: "semantic cache threshold is too high",
+			env: map[string]string{
+				"SEMANTIC_CACHE_THRESHOLD": "1.1",
+			},
+		},
+		{
+			name: "semantic cache max temperature is negative",
+			env: map[string]string{
+				"SEMANTIC_CACHE_MAX_TEMPERATURE": "-0.1",
 			},
 		},
 	}

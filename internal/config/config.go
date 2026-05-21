@@ -34,6 +34,9 @@ type Config struct {
 	ClickHousePassword     string   `yaml:"clickhouse_password"`
 	PromptCacheEnabled     bool     `yaml:"prompt_cache_enabled"`
 	PromptCacheTTLSeconds  int      `yaml:"prompt_cache_ttl_seconds"`
+	SemanticCacheEnabled   bool     `yaml:"semantic_cache_enabled"`
+	SemanticCacheThreshold float64  `yaml:"semantic_cache_threshold"`
+	SemanticCacheMaxTemp   float64  `yaml:"semantic_cache_max_temperature"`
 }
 
 func Load(path string) (Config, error) {
@@ -112,27 +115,36 @@ func (c Config) Validate() error {
 	if c.PromptCacheTTLSeconds <= 0 {
 		return fmt.Errorf("PROMPT_CACHE_TTL_SECONDS must be greater than 0")
 	}
+	if c.SemanticCacheThreshold <= 0 || c.SemanticCacheThreshold > 1 {
+		return fmt.Errorf("SEMANTIC_CACHE_THRESHOLD must be greater than 0 and less than or equal to 1")
+	}
+	if c.SemanticCacheMaxTemp < 0 {
+		return fmt.Errorf("SEMANTIC_CACHE_MAX_TEMPERATURE must be greater than or equal to 0")
+	}
 	return nil
 }
 
 func defaultConfig() Config {
 	return Config{
-		AppEnv:             "development",
-		ServerPort:         8080,
-		DatabaseURL:        "postgres://llmgw:llmgw@localhost:5432/llmgw?sslmode=disable",
-		RedisURL:           "redis://localhost:6379/0",
-		LogLevel:           "info",
-		MaxRetries:         1,
-		RetryBackoffMS:     100,
-		KafkaEnabled:       false,
-		KafkaBrokers:       []string{},
-		KafkaUsageTopic:    "llm-usage-events",
-		ClickHouseEnabled:  false,
-		ClickHouseURL:      "http://localhost:8123",
-		ClickHouseDatabase: "llmgw",
-		ClickHouseUsername: "default",
-		PromptCacheEnabled: true,
-		PromptCacheTTLSeconds: 300,
+		AppEnv:                 "development",
+		ServerPort:             8080,
+		DatabaseURL:            "postgres://llmgw:llmgw@localhost:5432/llmgw?sslmode=disable",
+		RedisURL:               "redis://localhost:6379/0",
+		LogLevel:               "info",
+		MaxRetries:             1,
+		RetryBackoffMS:         100,
+		KafkaEnabled:           false,
+		KafkaBrokers:           []string{},
+		KafkaUsageTopic:        "llm-usage-events",
+		ClickHouseEnabled:      false,
+		ClickHouseURL:          "http://localhost:8123",
+		ClickHouseDatabase:     "llmgw",
+		ClickHouseUsername:     "default",
+		PromptCacheEnabled:     true,
+		PromptCacheTTLSeconds:  300,
+		SemanticCacheEnabled:   false,
+		SemanticCacheThreshold: 0.92,
+		SemanticCacheMaxTemp:   0.3,
 	}
 }
 
@@ -212,6 +224,27 @@ func applyEnv(cfg *Config) error {
 			return fmt.Errorf("parse PROMPT_CACHE_TTL_SECONDS: %w", err)
 		}
 		cfg.PromptCacheTTLSeconds = ttl
+	}
+	if value := os.Getenv("SEMANTIC_CACHE_ENABLED"); value != "" {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("parse SEMANTIC_CACHE_ENABLED: %w", err)
+		}
+		cfg.SemanticCacheEnabled = enabled
+	}
+	if value := os.Getenv("SEMANTIC_CACHE_THRESHOLD"); value != "" {
+		threshold, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return fmt.Errorf("parse SEMANTIC_CACHE_THRESHOLD: %w", err)
+		}
+		cfg.SemanticCacheThreshold = threshold
+	}
+	if value := os.Getenv("SEMANTIC_CACHE_MAX_TEMPERATURE"); value != "" {
+		maxTemp, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return fmt.Errorf("parse SEMANTIC_CACHE_MAX_TEMPERATURE: %w", err)
+		}
+		cfg.SemanticCacheMaxTemp = maxTemp
 	}
 	return nil
 }
