@@ -234,6 +234,120 @@ func TestResolverLowestCostUsesPriorityForEqualPrices(t *testing.T) {
 	}
 }
 
+func TestResolverLowestLatencySelectsLowestP95Target(t *testing.T) {
+	ctx := context.Background()
+	st := openRoutingTestStore(t, ctx)
+	resetRoutingTestDatabase(t, ctx, st)
+	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+
+	org := createRoutingTestOrg(t, ctx, st, "resolver-lowest-latency-org")
+	slowProvider := createRoutingTestProvider(t, ctx, st, org.ID, "slow-provider", "active")
+	slowModel := createRoutingTestModel(t, ctx, st, org.ID, slowProvider.ID, "slow-model", "active")
+	fastProvider := createRoutingTestProvider(t, ctx, st, org.ID, "fast-provider", "active")
+	fastModel := createRoutingTestModel(t, ctx, st, org.ID, fastProvider.ID, "fast-model", "active")
+	createRoutingTestLowestLatencyPolicy(t, ctx, st, org.ID, "lowest-latency-policy", "latency-chat", json.RawMessage(`{"latency_window_minutes":30}`), []routingTestTarget{
+		{ProviderID: slowProvider.ID, ModelID: slowModel.ID, Priority: 1},
+		{ProviderID: fastProvider.ID, ModelID: fastModel.ID, Priority: 2},
+	})
+	insertRoutingLatencyLog(t, ctx, st, org.ID, slowProvider.ID, slowModel.ID, 300, now.Add(-10*time.Minute), "success")
+	insertRoutingLatencyLog(t, ctx, st, org.ID, fastProvider.ID, fastModel.ID, 80, now.Add(-10*time.Minute), "success")
+
+	resolver := NewResolver(st.Queries)
+	resolver.now = func() time.Time { return now }
+	result, err := resolver.Resolve(ctx, ResolveParams{OrgID: org.ID, RequestedModel: "latency-chat"})
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if result.Provider.ID != fastProvider.ID {
+		t.Fatalf("provider id = %s, want fast provider %s", result.Provider.ID, fastProvider.ID)
+	}
+}
+
+func TestResolverLowestLatencyFallsBackToPriorityWithoutStats(t *testing.T) {
+	ctx := context.Background()
+	st := openRoutingTestStore(t, ctx)
+	resetRoutingTestDatabase(t, ctx, st)
+	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+
+	org := createRoutingTestOrg(t, ctx, st, "resolver-lowest-latency-priority-org")
+	providerA := createRoutingTestProvider(t, ctx, st, org.ID, "provider-a", "active")
+	modelA := createRoutingTestModel(t, ctx, st, org.ID, providerA.ID, "model-a", "active")
+	providerB := createRoutingTestProvider(t, ctx, st, org.ID, "provider-b", "active")
+	modelB := createRoutingTestModel(t, ctx, st, org.ID, providerB.ID, "model-b", "active")
+	createRoutingTestLowestLatencyPolicy(t, ctx, st, org.ID, "lowest-latency-priority-policy", "latency-priority-chat", json.RawMessage(`{"latency_window_minutes":30}`), []routingTestTarget{
+		{ProviderID: providerA.ID, ModelID: modelA.ID, Priority: 1},
+		{ProviderID: providerB.ID, ModelID: modelB.ID, Priority: 2},
+	})
+
+	resolver := NewResolver(st.Queries)
+	resolver.now = func() time.Time { return now }
+	result, err := resolver.Resolve(ctx, ResolveParams{OrgID: org.ID, RequestedModel: "latency-priority-chat"})
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if result.Provider.ID != providerA.ID {
+		t.Fatalf("provider id = %s, want priority provider %s", result.Provider.ID, providerA.ID)
+	}
+}
+
+func TestResolverLowestLatencySkipsDisabledTarget(t *testing.T) {
+	ctx := context.Background()
+	st := openRoutingTestStore(t, ctx)
+	resetRoutingTestDatabase(t, ctx, st)
+	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+
+	org := createRoutingTestOrg(t, ctx, st, "resolver-lowest-latency-disabled-org")
+	disabledProvider := createRoutingTestProvider(t, ctx, st, org.ID, "disabled-provider", "disabled")
+	disabledModel := createRoutingTestModel(t, ctx, st, org.ID, disabledProvider.ID, "disabled-model", "active")
+	activeProvider := createRoutingTestProvider(t, ctx, st, org.ID, "active-provider", "active")
+	activeModel := createRoutingTestModel(t, ctx, st, org.ID, activeProvider.ID, "active-model", "active")
+	createRoutingTestLowestLatencyPolicy(t, ctx, st, org.ID, "lowest-latency-disabled-policy", "latency-disabled-chat", json.RawMessage(`{"latency_window_minutes":30}`), []routingTestTarget{
+		{ProviderID: disabledProvider.ID, ModelID: disabledModel.ID, Priority: 1},
+		{ProviderID: activeProvider.ID, ModelID: activeModel.ID, Priority: 2},
+	})
+	insertRoutingLatencyLog(t, ctx, st, org.ID, disabledProvider.ID, disabledModel.ID, 1, now.Add(-10*time.Minute), "success")
+	insertRoutingLatencyLog(t, ctx, st, org.ID, activeProvider.ID, activeModel.ID, 200, now.Add(-10*time.Minute), "success")
+
+	resolver := NewResolver(st.Queries)
+	resolver.now = func() time.Time { return now }
+	result, err := resolver.Resolve(ctx, ResolveParams{OrgID: org.ID, RequestedModel: "latency-disabled-chat"})
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if result.Provider.ID != activeProvider.ID {
+		t.Fatalf("provider id = %s, want active provider %s", result.Provider.ID, activeProvider.ID)
+	}
+}
+
+func TestResolverLowestLatencyIgnoresStatsOutsideWindow(t *testing.T) {
+	ctx := context.Background()
+	st := openRoutingTestStore(t, ctx)
+	resetRoutingTestDatabase(t, ctx, st)
+	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+
+	org := createRoutingTestOrg(t, ctx, st, "resolver-lowest-latency-window-org")
+	providerA := createRoutingTestProvider(t, ctx, st, org.ID, "provider-a", "active")
+	modelA := createRoutingTestModel(t, ctx, st, org.ID, providerA.ID, "model-a", "active")
+	providerB := createRoutingTestProvider(t, ctx, st, org.ID, "provider-b", "active")
+	modelB := createRoutingTestModel(t, ctx, st, org.ID, providerB.ID, "model-b", "active")
+	createRoutingTestLowestLatencyPolicy(t, ctx, st, org.ID, "lowest-latency-window-policy", "latency-window-chat", json.RawMessage(`{"latency_window_minutes":15}`), []routingTestTarget{
+		{ProviderID: providerA.ID, ModelID: modelA.ID, Priority: 1},
+		{ProviderID: providerB.ID, ModelID: modelB.ID, Priority: 2},
+	})
+	insertRoutingLatencyLog(t, ctx, st, org.ID, providerA.ID, modelA.ID, 500, now.Add(-10*time.Minute), "success")
+	insertRoutingLatencyLog(t, ctx, st, org.ID, providerB.ID, modelB.ID, 1, now.Add(-60*time.Minute), "success")
+
+	resolver := NewResolver(st.Queries)
+	resolver.now = func() time.Time { return now }
+	result, err := resolver.Resolve(ctx, ResolveParams{OrgID: org.ID, RequestedModel: "latency-window-chat"})
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if result.Provider.ID != providerA.ID {
+		t.Fatalf("provider id = %s, want provider with in-window stats %s", result.Provider.ID, providerA.ID)
+	}
+}
+
 func TestResolverReturnsRouteNotFoundForMissingAlias(t *testing.T) {
 	ctx := context.Background()
 	st := openRoutingTestStore(t, ctx)
@@ -488,4 +602,62 @@ func createRoutingTestLowestCostPolicy(t *testing.T, ctx context.Context, st *st
 		}
 	}
 	return policy
+}
+
+func createRoutingTestLowestLatencyPolicy(t *testing.T, ctx context.Context, st *store.Store, orgID uuid.UUID, name string, matchModel string, config json.RawMessage, targets []routingTestTarget) db.RoutePolicy {
+	t.Helper()
+
+	now := time.Now().UTC()
+	policy, err := st.Queries.CreateRoutePolicy(ctx, db.CreateRoutePolicyParams{
+		ID:         uuid.New(),
+		OrgID:      orgID,
+		Name:       name,
+		MatchModel: matchModel,
+		Strategy:   StrategyLowestLatency,
+		Config:     config,
+		Status:     "active",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("CreateRoutePolicy returned error: %v", err)
+	}
+	for _, target := range targets {
+		if _, err := st.Queries.CreateRouteTarget(ctx, db.CreateRouteTargetParams{
+			ID:            uuid.New(),
+			OrgID:         orgID,
+			RoutePolicyID: policy.ID,
+			ProviderID:    target.ProviderID,
+			ModelID:       target.ModelID,
+			Priority:      target.Priority,
+			Weight:        100,
+			CreatedAt:     now,
+		}); err != nil {
+			t.Fatalf("CreateRouteTarget returned error: %v", err)
+		}
+	}
+	return policy
+}
+
+func insertRoutingLatencyLog(t *testing.T, ctx context.Context, st *store.Store, orgID uuid.UUID, providerID uuid.UUID, modelID uuid.UUID, latencyMS int32, completedAt time.Time, status string) {
+	t.Helper()
+
+	if _, err := st.Queries.InsertRequestLog(ctx, db.InsertRequestLogParams{
+		ID:           uuid.New(),
+		OrgID:        orgID,
+		ProviderID:   &providerID,
+		ModelID:      &modelID,
+		Method:       "POST",
+		Path:         "/v1/chat/completions",
+		RequestModel: pgtype.Text{String: "latency-chat", Valid: true},
+		Status:       status,
+		StatusCode:   200,
+		RequestHash:  pgtype.Text{String: "sha256:request", Valid: true},
+		ResponseHash: pgtype.Text{String: "sha256:response", Valid: true},
+		LatencyMs:    latencyMS,
+		StartedAt:    completedAt.Add(-time.Duration(latencyMS) * time.Millisecond),
+		CompletedAt:  completedAt,
+	}); err != nil {
+		t.Fatalf("InsertRequestLog returned error: %v", err)
+	}
 }

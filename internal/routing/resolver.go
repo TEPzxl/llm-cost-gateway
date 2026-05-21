@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	StrategySingle     = "single"
-	StrategyFallback   = "fallback"
-	StrategyLowestCost = "lowest_cost"
+	StrategySingle        = "single"
+	StrategyFallback      = "fallback"
+	StrategyLowestCost    = "lowest_cost"
+	StrategyLowestLatency = "lowest_latency"
 )
 
 var (
@@ -68,6 +69,9 @@ type ResolvedTarget struct {
 	Provider              db.Provider
 	Model                 db.Model
 	EstimatedCostMicroUSD int64
+	HasLatencyStats       bool
+	P50LatencyMS          float64
+	P95LatencyMS          float64
 }
 
 type ResolveTargetsResult struct {
@@ -82,6 +86,7 @@ type Service struct {
 type Resolver struct {
 	queries    *db.Queries
 	calculator *costing.Calculator
+	now        func() time.Time
 }
 
 func NewService(st *store.Store) *Service {
@@ -89,7 +94,11 @@ func NewService(st *store.Store) *Service {
 }
 
 func NewResolver(queries *db.Queries) *Resolver {
-	return &Resolver{queries: queries, calculator: costing.NewCalculator()}
+	return &Resolver{
+		queries:    queries,
+		calculator: costing.NewCalculator(),
+		now:        func() time.Time { return time.Now().UTC() },
+	}
 }
 
 func (s *Service) CreateRoutePolicy(ctx context.Context, params CreateRoutePolicyParams) (db.RoutePolicy, error) {
@@ -224,7 +233,7 @@ func (r *Resolver) ResolveTargets(ctx context.Context, params ResolveParams) (Re
 			return ResolveTargetsResult{}, err
 		}
 		if provider.Status != "active" || model.Status != "active" || model.ProviderID != provider.ID {
-			if policy.Strategy == StrategyLowestCost {
+			if policy.Strategy == StrategyLowestCost || policy.Strategy == StrategyLowestLatency {
 				continue
 			}
 			return ResolveTargetsResult{}, ErrRouteNotFound
@@ -242,6 +251,13 @@ func (r *Resolver) ResolveTargets(ctx context.Context, params ResolveParams) (Re
 		}
 		resolvedTargets = resolved
 	}
+	if policy.Strategy == StrategyLowestLatency {
+		resolved, err := r.resolveLowestLatencyTargets(ctx, policy, params, resolvedTargets)
+		if err != nil {
+			return ResolveTargetsResult{}, err
+		}
+		resolvedTargets = resolved
+	}
 	if len(resolvedTargets) == 0 {
 		return ResolveTargetsResult{}, ErrRouteNotFound
 	}
@@ -251,6 +267,7 @@ func (r *Resolver) ResolveTargets(ctx context.Context, params ResolveParams) (Re
 type PolicyConfig struct {
 	MaxEstimatedCostMicroUSD *int64 `json:"max_estimated_cost_micro_usd,omitempty"`
 	FallbackToPriority       *bool  `json:"fallback_to_priority,omitempty"`
+	LatencyWindowMinutes     *int64 `json:"latency_window_minutes,omitempty"`
 }
 
 func (r *Resolver) resolveLowestCostTargets(policy db.RoutePolicy, params ResolveParams, targets []ResolvedTarget) ([]ResolvedTarget, error) {
@@ -311,6 +328,65 @@ func (r *Resolver) estimatedCostMicroUSD(model db.Model, params ResolveParams) (
 	return calculation.TotalCostMicro, nil
 }
 
+type latencyStatsKey struct {
+	ProviderID uuid.UUID
+	ModelID    uuid.UUID
+}
+
+func (r *Resolver) resolveLowestLatencyTargets(ctx context.Context, policy db.RoutePolicy, params ResolveParams, targets []ResolvedTarget) ([]ResolvedTarget, error) {
+	cfg, err := parsePolicyConfig(policy.Config)
+	if err != nil {
+		return nil, err
+	}
+	to := r.now()
+	from := to.Add(-time.Duration(cfg.latencyWindowMinutes()) * time.Minute)
+	stats, err := r.queries.ProviderModelLatencyStats(ctx, db.ProviderModelLatencyStatsParams{
+		OrgID:         params.OrgID,
+		CompletedAt:   from,
+		CompletedAt_2: to,
+	})
+	if err != nil {
+		return nil, err
+	}
+	statsByTarget := make(map[latencyStatsKey]db.ProviderModelLatencyStatsRow, len(stats))
+	for _, item := range stats {
+		if item.ProviderID == nil || item.ModelID == nil {
+			continue
+		}
+		statsByTarget[latencyStatsKey{ProviderID: *item.ProviderID, ModelID: *item.ModelID}] = item
+	}
+	for index := range targets {
+		key := latencyStatsKey{ProviderID: targets[index].Provider.ID, ModelID: targets[index].Model.ID}
+		if stat, ok := statsByTarget[key]; ok && stat.RequestCount > 0 {
+			targets[index].HasLatencyStats = true
+			targets[index].P50LatencyMS = stat.P50LatencyMs
+			targets[index].P95LatencyMS = stat.P95LatencyMs
+		}
+	}
+	sortLatencyTargets(targets)
+	return targets, nil
+}
+
+func sortLatencyTargets(targets []ResolvedTarget) {
+	sort.SliceStable(targets, func(i, j int) bool {
+		if targets[i].HasLatencyStats != targets[j].HasLatencyStats {
+			return targets[i].HasLatencyStats
+		}
+		if targets[i].HasLatencyStats && targets[j].HasLatencyStats {
+			if targets[i].P95LatencyMS != targets[j].P95LatencyMS {
+				return targets[i].P95LatencyMS < targets[j].P95LatencyMS
+			}
+			if targets[i].P50LatencyMS != targets[j].P50LatencyMS {
+				return targets[i].P50LatencyMS < targets[j].P50LatencyMS
+			}
+		}
+		if targets[i].RouteTarget.Priority != targets[j].RouteTarget.Priority {
+			return targets[i].RouteTarget.Priority < targets[j].RouteTarget.Priority
+		}
+		return targets[i].RouteTarget.ID.String() < targets[j].RouteTarget.ID.String()
+	})
+}
+
 func sortLowestCostTargets(targets []ResolvedTarget) {
 	sort.SliceStable(targets, func(i, j int) bool {
 		if targets[i].EstimatedCostMicroUSD != targets[j].EstimatedCostMicroUSD {
@@ -334,6 +410,9 @@ func parsePolicyConfig(raw json.RawMessage) (PolicyConfig, error) {
 	if cfg.MaxEstimatedCostMicroUSD != nil && *cfg.MaxEstimatedCostMicroUSD < 0 {
 		return PolicyConfig{}, validationError("max_estimated_cost_micro_usd must be non-negative")
 	}
+	if cfg.LatencyWindowMinutes != nil && *cfg.LatencyWindowMinutes <= 0 {
+		return PolicyConfig{}, validationError("latency_window_minutes must be greater than zero")
+	}
 	return cfg, nil
 }
 
@@ -342,6 +421,13 @@ func (c PolicyConfig) fallbackToPriority() bool {
 		return true
 	}
 	return *c.FallbackToPriority
+}
+
+func (c PolicyConfig) latencyWindowMinutes() int64 {
+	if c.LatencyWindowMinutes == nil {
+		return 15
+	}
+	return *c.LatencyWindowMinutes
 }
 
 func validateCreateRoutePolicyParams(params CreateRoutePolicyParams) error {
@@ -355,7 +441,7 @@ func validateCreateRoutePolicyParams(params CreateRoutePolicyParams) error {
 		return validationError("match_model is required")
 	}
 	if !validStrategy(params.Strategy) {
-		return validationError("strategy must be single, fallback or lowest_cost")
+		return validationError("strategy must be single, fallback, lowest_cost or lowest_latency")
 	}
 	if params.Strategy == StrategySingle && len(params.Targets) != 1 {
 		return validationError("single strategy requires exactly one target")
@@ -365,6 +451,9 @@ func validateCreateRoutePolicyParams(params CreateRoutePolicyParams) error {
 	}
 	if params.Strategy == StrategyLowestCost && len(params.Targets) == 0 {
 		return validationError("lowest_cost strategy requires at least one target")
+	}
+	if params.Strategy == StrategyLowestLatency && len(params.Targets) == 0 {
+		return validationError("lowest_latency strategy requires at least one target")
 	}
 	for _, target := range params.Targets {
 		if target.ProviderID == uuid.Nil {
@@ -402,7 +491,7 @@ func normalizePolicyConfig(raw json.RawMessage) (json.RawMessage, error) {
 
 func validStrategy(strategy string) bool {
 	switch strategy {
-	case StrategySingle, StrategyFallback, StrategyLowestCost:
+	case StrategySingle, StrategyFallback, StrategyLowestCost, StrategyLowestLatency:
 		return true
 	default:
 		return false
