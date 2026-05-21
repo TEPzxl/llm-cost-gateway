@@ -3,13 +3,17 @@ package metering
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/tep/llm-cost-gateway/internal/costing"
+	"github.com/tep/llm-cost-gateway/internal/domain"
+	"github.com/tep/llm-cost-gateway/internal/events"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 	"github.com/tep/llm-cost-gateway/internal/testutil"
@@ -82,6 +86,105 @@ func TestServiceRecordSuccessWritesRequestUsageAndCost(t *testing.T) {
 	assertTableCount(t, ctx, st, "cost_records", 1)
 }
 
+func TestServiceRecordSuccessPublishesUsageEvent(t *testing.T) {
+	ctx := context.Background()
+	st := openMeteringTestStore(t, ctx)
+	resetMeteringTestDatabase(t, ctx, st)
+	fixture := createMeteringFixture(t, ctx, st)
+	publisher := &capturingPublisher{}
+	service := NewService(st, costing.NewCalculator(), WithUsageEventPublisher(publisher))
+
+	requestID := uuid.New()
+	_, err := service.RecordSuccess(ctx, RecordSuccessInput{
+		RequestID:                      requestID,
+		OrgID:                          fixture.OrgID,
+		APIKeyID:                       fixture.APIKeyID,
+		ProviderID:                     fixture.ProviderID,
+		ModelID:                        fixture.ModelID,
+		Method:                         "POST",
+		Path:                           "/v1/chat/completions",
+		RequestModel:                   "fast-chat",
+		StatusCode:                     200,
+		RequestHash:                    "sha256:request-hash",
+		ResponseHash:                   "sha256:response-hash",
+		LatencyMS:                      100,
+		PromptTokens:                   20,
+		CompletionTokens:               30,
+		InputPriceMicroUSDPer1KTokens:  100,
+		OutputPriceMicroUSDPer1KTokens: 200,
+		ProviderUsageJSON:              json.RawMessage(`{"prompt_tokens":20,"completion_tokens":30,"total_tokens":50}`),
+		StartedAt:                      time.Now().UTC().Add(-time.Second),
+		CompletedAt:                    time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("RecordSuccess returned error: %v", err)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("published events = %d, want 1", len(publisher.events))
+	}
+	event := publisher.events[0]
+	if event.Type != events.EventUsageRecorded {
+		t.Fatalf("event type = %q, want %q", event.Type, events.EventUsageRecorded)
+	}
+	if event.OrgID != fixture.OrgID || event.RequestID != requestID {
+		t.Fatalf("event ids = org %s request %s, want org %s request %s", event.OrgID, event.RequestID, fixture.OrgID, requestID)
+	}
+	if event.APIKeyID == nil || *event.APIKeyID != fixture.APIKeyID {
+		t.Fatalf("api_key_id = %v, want %s", event.APIKeyID, fixture.APIKeyID)
+	}
+	if event.ProviderID == nil || *event.ProviderID != fixture.ProviderID {
+		t.Fatalf("provider_id = %v, want %s", event.ProviderID, fixture.ProviderID)
+	}
+	if event.ModelID == nil || *event.ModelID != fixture.ModelID {
+		t.Fatalf("model_id = %v, want %s", event.ModelID, fixture.ModelID)
+	}
+	if event.PromptTokens != 20 || event.CompletionTokens != 30 || event.TotalTokens != 50 {
+		t.Fatalf("event tokens = %+v, want prompt=20 completion=30 total=50", event)
+	}
+	if event.TotalCostMicroUSD != 8 {
+		t.Fatalf("event total cost = %d, want 8", event.TotalCostMicroUSD)
+	}
+	if event.Status != StatusSuccess {
+		t.Fatalf("event status = %q, want %q", event.Status, StatusSuccess)
+	}
+}
+
+func TestServicePublishFailureDoesNotRollbackSuccess(t *testing.T) {
+	ctx := context.Background()
+	st := openMeteringTestStore(t, ctx)
+	resetMeteringTestDatabase(t, ctx, st)
+	fixture := createMeteringFixture(t, ctx, st)
+	service := NewService(st, costing.NewCalculator(), WithUsageEventPublisher(failingPublisher{}))
+
+	_, err := service.RecordSuccess(ctx, RecordSuccessInput{
+		RequestID:                      uuid.New(),
+		OrgID:                          fixture.OrgID,
+		APIKeyID:                       fixture.APIKeyID,
+		ProviderID:                     fixture.ProviderID,
+		ModelID:                        fixture.ModelID,
+		Method:                         "POST",
+		Path:                           "/v1/chat/completions",
+		RequestModel:                   "fast-chat",
+		StatusCode:                     200,
+		RequestHash:                    "sha256:request-hash",
+		ResponseHash:                   "sha256:response-hash",
+		LatencyMS:                      100,
+		PromptTokens:                   20,
+		CompletionTokens:               30,
+		InputPriceMicroUSDPer1KTokens:  100,
+		OutputPriceMicroUSDPer1KTokens: 200,
+		StartedAt:                      time.Now().UTC().Add(-time.Second),
+		CompletedAt:                    time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("RecordSuccess returned error: %v", err)
+	}
+
+	assertTableCount(t, ctx, st, "request_logs", 1)
+	assertTableCount(t, ctx, st, "usage_records", 1)
+	assertTableCount(t, ctx, st, "cost_records", 1)
+}
+
 func TestServiceRecordFailureWritesOnlyRequestLog(t *testing.T) {
 	ctx := context.Background()
 	st := openMeteringTestStore(t, ctx)
@@ -118,6 +221,62 @@ func TestServiceRecordFailureWritesOnlyRequestLog(t *testing.T) {
 	assertTableCount(t, ctx, st, "request_logs", 1)
 	assertTableCount(t, ctx, st, "usage_records", 0)
 	assertTableCount(t, ctx, st, "cost_records", 0)
+}
+
+func TestServiceRecordBudgetBlockPublishesBlockedEvent(t *testing.T) {
+	ctx := context.Background()
+	st := openMeteringTestStore(t, ctx)
+	resetMeteringTestDatabase(t, ctx, st)
+	fixture := createMeteringFixture(t, ctx, st)
+	publisher := &capturingPublisher{}
+	service := NewService(st, costing.NewCalculator(), WithUsageEventPublisher(publisher))
+
+	requestID := uuid.New()
+	_, err := service.RecordFailure(ctx, RecordFailureInput{
+		RequestID:    requestID,
+		OrgID:        fixture.OrgID,
+		APIKeyID:     &fixture.APIKeyID,
+		ProviderID:   &fixture.ProviderID,
+		ModelID:      &fixture.ModelID,
+		Method:       "POST",
+		Path:         "/v1/chat/completions",
+		RequestModel: "fast-chat",
+		Status:       StatusBudgetBlocked,
+		StatusCode:   402,
+		ErrorCode:    domain.CodeBudgetExceeded,
+		RequestHash:  "sha256:request-hash",
+		LatencyMS:    100,
+		StartedAt:    time.Now().UTC().Add(-time.Second),
+		CompletedAt:  time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("RecordFailure returned error: %v", err)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("published events = %d, want 1", len(publisher.events))
+	}
+	event := publisher.events[0]
+	if event.Type != events.EventRequestBlocked {
+		t.Fatalf("event type = %q, want %q", event.Type, events.EventRequestBlocked)
+	}
+	if event.OrgID != fixture.OrgID || event.RequestID != requestID {
+		t.Fatalf("event ids = org %s request %s, want org %s request %s", event.OrgID, event.RequestID, fixture.OrgID, requestID)
+	}
+	if event.APIKeyID == nil || *event.APIKeyID != fixture.APIKeyID {
+		t.Fatalf("api_key_id = %v, want %s", event.APIKeyID, fixture.APIKeyID)
+	}
+	if event.ProviderID == nil || *event.ProviderID != fixture.ProviderID {
+		t.Fatalf("provider_id = %v, want %s", event.ProviderID, fixture.ProviderID)
+	}
+	if event.ModelID == nil || *event.ModelID != fixture.ModelID {
+		t.Fatalf("model_id = %v, want %s", event.ModelID, fixture.ModelID)
+	}
+	if event.TotalTokens != 0 || event.TotalCostMicroUSD != 0 {
+		t.Fatalf("event totals = tokens %d cost %d, want zero", event.TotalTokens, event.TotalCostMicroUSD)
+	}
+	if event.Status != StatusBudgetBlocked {
+		t.Fatalf("event status = %q, want %q", event.Status, StatusBudgetBlocked)
+	}
 }
 
 func TestServiceRecordSuccessRollsBackWhenCostingFails(t *testing.T) {
@@ -210,6 +369,55 @@ func TestServiceDoesNotPersistPromptOrResponseContent(t *testing.T) {
 	}
 	if found != 0 {
 		t.Fatalf("found %d rows containing raw prompt/response content", found)
+	}
+}
+
+func TestServiceUsageEventDoesNotContainSensitiveContent(t *testing.T) {
+	ctx := context.Background()
+	st := openMeteringTestStore(t, ctx)
+	resetMeteringTestDatabase(t, ctx, st)
+	fixture := createMeteringFixture(t, ctx, st)
+	publisher := &capturingPublisher{}
+	service := NewService(st, costing.NewCalculator(), WithUsageEventPublisher(publisher))
+
+	rawPrompt := "secret prompt text"
+	rawResponse := "secret response text"
+	if _, err := service.RecordSuccess(ctx, RecordSuccessInput{
+		RequestID:                      uuid.New(),
+		OrgID:                          fixture.OrgID,
+		APIKeyID:                       fixture.APIKeyID,
+		ProviderID:                     fixture.ProviderID,
+		ModelID:                        fixture.ModelID,
+		Method:                         "POST",
+		Path:                           "/v1/chat/completions",
+		RequestModel:                   "fast-chat",
+		StatusCode:                     200,
+		RequestHash:                    "sha256:not-raw-prompt",
+		ResponseHash:                   "sha256:not-raw-response",
+		LatencyMS:                      100,
+		PromptTokens:                   1,
+		CompletionTokens:               1,
+		InputPriceMicroUSDPer1KTokens:  100,
+		OutputPriceMicroUSDPer1KTokens: 200,
+		ProviderUsageJSON:              json.RawMessage(`{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}`),
+		StartedAt:                      time.Now().UTC().Add(-time.Second),
+		CompletedAt:                    time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("RecordSuccess returned error: %v", err)
+	}
+
+	if len(publisher.events) != 1 {
+		t.Fatalf("published events = %d, want 1", len(publisher.events))
+	}
+	body, err := json.Marshal(publisher.events[0])
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	payload := strings.ToLower(string(body))
+	for _, secret := range []string{rawPrompt, rawResponse, "llmgw_live_", "authorization"} {
+		if strings.Contains(payload, strings.ToLower(secret)) {
+			t.Fatalf("event contains sensitive value %q: %s", secret, payload)
+		}
 	}
 }
 
@@ -364,4 +572,19 @@ func assertTableCount(t *testing.T, ctx context.Context, st *store.Store, table 
 
 func int32Ptr(value int32) *int32 {
 	return &value
+}
+
+type capturingPublisher struct {
+	events []events.UsageEvent
+}
+
+func (p *capturingPublisher) Publish(_ context.Context, event events.UsageEvent) error {
+	p.events = append(p.events, event)
+	return nil
+}
+
+type failingPublisher struct{}
+
+func (failingPublisher) Publish(context.Context, events.UsageEvent) error {
+	return errors.New("publish failed")
 }

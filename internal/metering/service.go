@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/tep/llm-cost-gateway/internal/costing"
+	"github.com/tep/llm-cost-gateway/internal/domain"
 	"github.com/tep/llm-cost-gateway/internal/events"
 	"github.com/tep/llm-cost-gateway/internal/observability"
 	"github.com/tep/llm-cost-gateway/internal/store"
@@ -231,6 +232,20 @@ func (s *Service) RecordSuccess(ctx context.Context, input RecordSuccessInput) (
 	if err != nil {
 		return RecordSuccessResult{}, err
 	}
+	s.publishUsageEvent(ctx, events.UsageEvent{
+		Type:              events.EventUsageRecorded,
+		OrgID:             input.OrgID,
+		APIKeyID:          uuidPtr(input.APIKeyID),
+		ProviderID:        uuidPtr(input.ProviderID),
+		ModelID:           uuidPtr(input.ModelID),
+		RequestID:         result.RequestLog.ID,
+		PromptTokens:      int64(result.UsageRecord.PromptTokens),
+		CompletionTokens:  int64(result.UsageRecord.CompletionTokens),
+		TotalTokens:       int64(result.UsageRecord.TotalTokens),
+		TotalCostMicroUSD: result.CostRecord.TotalCostMicro,
+		Status:            result.RequestLog.Status,
+		CreatedAt:         result.UsageRecord.CreatedAt,
+	})
 	return result, nil
 }
 
@@ -239,7 +254,7 @@ func (s *Service) RecordFailure(ctx context.Context, input RecordFailureInput) (
 		return db.RequestLog{}, err
 	}
 
-	return s.store.Queries.InsertRequestLog(ctx, db.InsertRequestLogParams{
+	requestLog, err := s.store.Queries.InsertRequestLog(ctx, db.InsertRequestLogParams{
 		ID:                input.RequestID,
 		OrgID:             input.OrgID,
 		ApiKeyID:          input.APIKeyID,
@@ -260,6 +275,46 @@ func (s *Service) RecordFailure(ctx context.Context, input RecordFailureInput) (
 		StartedAt:         nonZeroTime(input.StartedAt, s.now()),
 		CompletedAt:       nonZeroTime(input.CompletedAt, s.now()),
 	})
+	if err != nil {
+		return db.RequestLog{}, err
+	}
+	if input.Status == StatusBudgetBlocked && input.ErrorCode == domain.CodeBudgetExceeded {
+		s.publishUsageEvent(ctx, events.UsageEvent{
+			Type:              events.EventRequestBlocked,
+			OrgID:             input.OrgID,
+			APIKeyID:          input.APIKeyID,
+			ProviderID:        input.ProviderID,
+			ModelID:           input.ModelID,
+			RequestID:         requestLog.ID,
+			PromptTokens:      0,
+			CompletionTokens:  0,
+			TotalTokens:       0,
+			TotalCostMicroUSD: 0,
+			Status:            requestLog.Status,
+			CreatedAt:         requestLog.CompletedAt,
+		})
+	}
+	return requestLog, nil
+}
+
+func (s *Service) publishUsageEvent(ctx context.Context, event events.UsageEvent) {
+	if s.publisher == nil {
+		return
+	}
+	if err := s.publisher.Publish(ctx, event); err != nil {
+		if s.logger != nil {
+			s.logger.Warn(
+				"publish usage event failed",
+				zap.Error(err),
+				zap.String("event_type", event.Type),
+				zap.String("request_id", event.RequestID.String()),
+				zap.String("org_id", event.OrgID.String()),
+			)
+		}
+		if s.metrics != nil {
+			s.metrics.IncUsageEventPublishFailed()
+		}
+	}
 }
 
 func validateSuccessInput(input RecordSuccessInput) error {
@@ -355,4 +410,8 @@ func nonZeroTime(value time.Time, fallback time.Time) time.Time {
 		return fallback
 	}
 	return value
+}
+
+func uuidPtr(value uuid.UUID) *uuid.UUID {
+	return &value
 }
