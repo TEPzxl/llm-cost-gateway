@@ -27,6 +27,11 @@ type Config struct {
 	KafkaEnabled           bool     `yaml:"kafka_enabled"`
 	KafkaBrokers           []string `yaml:"kafka_brokers"`
 	KafkaUsageTopic        string   `yaml:"kafka_usage_topic"`
+	ClickHouseEnabled      bool     `yaml:"clickhouse_enabled"`
+	ClickHouseURL          string   `yaml:"clickhouse_url"`
+	ClickHouseDatabase     string   `yaml:"clickhouse_database"`
+	ClickHouseUsername     string   `yaml:"clickhouse_username"`
+	ClickHousePassword     string   `yaml:"clickhouse_password"`
 }
 
 func Load(path string) (Config, error) {
@@ -91,21 +96,36 @@ func (c Config) Validate() error {
 	if c.KafkaEnabled && c.KafkaUsageTopic == "" {
 		return fmt.Errorf("KAFKA_USAGE_TOPIC is required when Kafka is enabled")
 	}
+	if c.ClickHouseEnabled {
+		if err := validateHTTPURL("CLICKHOUSE_URL", c.ClickHouseURL); err != nil {
+			return err
+		}
+		if c.ClickHouseDatabase == "" {
+			return fmt.Errorf("CLICKHOUSE_DATABASE is required when ClickHouse is enabled")
+		}
+		if c.ClickHouseUsername == "" {
+			return fmt.Errorf("CLICKHOUSE_USERNAME is required when ClickHouse is enabled")
+		}
+	}
 	return nil
 }
 
 func defaultConfig() Config {
 	return Config{
-		AppEnv:          "development",
-		ServerPort:      8080,
-		DatabaseURL:     "postgres://llmgw:llmgw@localhost:5432/llmgw?sslmode=disable",
-		RedisURL:        "redis://localhost:6379/0",
-		LogLevel:        "info",
-		MaxRetries:      1,
-		RetryBackoffMS:  100,
-		KafkaEnabled:    false,
-		KafkaBrokers:    []string{},
-		KafkaUsageTopic: "llm-usage-events",
+		AppEnv:             "development",
+		ServerPort:         8080,
+		DatabaseURL:        "postgres://llmgw:llmgw@localhost:5432/llmgw?sslmode=disable",
+		RedisURL:           "redis://localhost:6379/0",
+		LogLevel:           "info",
+		MaxRetries:         1,
+		RetryBackoffMS:     100,
+		KafkaEnabled:       false,
+		KafkaBrokers:       []string{},
+		KafkaUsageTopic:    "llm-usage-events",
+		ClickHouseEnabled:  false,
+		ClickHouseURL:      "http://localhost:8123",
+		ClickHouseDatabase: "llmgw",
+		ClickHouseUsername: "default",
 	}
 }
 
@@ -161,6 +181,17 @@ func applyEnv(cfg *Config) error {
 		cfg.KafkaBrokers = splitCSV(value)
 	}
 	setStringFromEnv("KAFKA_USAGE_TOPIC", &cfg.KafkaUsageTopic)
+	if value := os.Getenv("CLICKHOUSE_ENABLED"); value != "" {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("parse CLICKHOUSE_ENABLED: %w", err)
+		}
+		cfg.ClickHouseEnabled = enabled
+	}
+	setStringFromEnv("CLICKHOUSE_URL", &cfg.ClickHouseURL)
+	setStringFromEnv("CLICKHOUSE_DATABASE", &cfg.ClickHouseDatabase)
+	setStringFromEnv("CLICKHOUSE_USERNAME", &cfg.ClickHouseUsername)
+	setStringFromEnv("CLICKHOUSE_PASSWORD", &cfg.ClickHousePassword)
 	return nil
 }
 
@@ -224,6 +255,20 @@ func validateRedisURL(value string) error {
 	}
 	if parsed.Host == "" {
 		return fmt.Errorf("REDIS_URL must include host")
+	}
+	return nil
+}
+
+func validateHTTPURL(name string, value string) error {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("%s must be a valid URL: %w", name, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("%s must use http or https scheme", name)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("%s must include host", name)
 	}
 	return nil
 }

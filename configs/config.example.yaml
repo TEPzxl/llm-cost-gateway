@@ -11,3 +11,8 @@ retry_backoff_ms: 100
 kafka_enabled: false
 kafka_brokers: []
 kafka_usage_topic: llm-usage-events
+clickhouse_enabled: false
+clickhouse_url: http://localhost:8123
+clickhouse_database: llmgw
+clickhouse_username: default
+clickhouse_password: ""

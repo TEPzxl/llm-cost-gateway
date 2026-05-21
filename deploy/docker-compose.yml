@@ -42,6 +42,25 @@ services:
     ports:
       - "9092:9092"
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    profiles: ["analytics"]
+    environment:
+      CLICKHOUSE_DB: llmgw
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - ./db/clickhouse:/docker-entrypoint-initdb.d:ro
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   gateway:
     build:
       context: .
@@ -62,6 +81,11 @@ services:
       KAFKA_ENABLED: "false"
       KAFKA_BROKERS: kafka:9092
       KAFKA_USAGE_TOPIC: llm-usage-events
+      CLICKHOUSE_ENABLED: "false"
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_DATABASE: llmgw
+      CLICKHOUSE_USERNAME: default
+      CLICKHOUSE_PASSWORD: ""
     ports:
       - "8080:8080"
     depends_on:
@@ -106,3 +130,4 @@ services:
 
 volumes:
   postgres_data:
+  clickhouse_data:

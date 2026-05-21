@@ -47,6 +47,18 @@ func TestLoadUsesDefaultsAndEnvironment(t *testing.T) {
 	if cfg.KafkaUsageTopic != "llm-usage-events" {
 		t.Fatalf("KafkaUsageTopic = %q, want llm-usage-events", cfg.KafkaUsageTopic)
 	}
+	if cfg.ClickHouseEnabled {
+		t.Fatal("ClickHouseEnabled = true, want false")
+	}
+	if cfg.ClickHouseURL != "http://localhost:8123" {
+		t.Fatalf("ClickHouseURL = %q, want http://localhost:8123", cfg.ClickHouseURL)
+	}
+	if cfg.ClickHouseDatabase != "llmgw" {
+		t.Fatalf("ClickHouseDatabase = %q, want llmgw", cfg.ClickHouseDatabase)
+	}
+	if cfg.ClickHouseUsername != "default" {
+		t.Fatalf("ClickHouseUsername = %q, want default", cfg.ClickHouseUsername)
+	}
 }
 
 func TestLoadReadsConfigFileAndEnvironmentOverrides(t *testing.T) {
@@ -56,6 +68,11 @@ func TestLoadReadsConfigFileAndEnvironmentOverrides(t *testing.T) {
 	t.Setenv("KAFKA_ENABLED", "true")
 	t.Setenv("KAFKA_BROKERS", " kafka-1:9092, kafka-2:9092 ")
 	t.Setenv("KAFKA_USAGE_TOPIC", "env-usage-events")
+	t.Setenv("CLICKHOUSE_ENABLED", "true")
+	t.Setenv("CLICKHOUSE_URL", "https://clickhouse.example.test:8123")
+	t.Setenv("CLICKHOUSE_DATABASE", "env_llmgw")
+	t.Setenv("CLICKHOUSE_USERNAME", "env_user")
+	t.Setenv("CLICKHOUSE_PASSWORD", "env_password")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	content := []byte(`
@@ -73,6 +90,11 @@ kafka_enabled: false
 kafka_brokers:
   - file-kafka:9092
 kafka_usage_topic: file-usage-events
+clickhouse_enabled: false
+clickhouse_url: http://file-clickhouse:8123
+clickhouse_database: file_llmgw
+clickhouse_username: file_user
+clickhouse_password: file_password
 `)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
@@ -115,6 +137,21 @@ kafka_usage_topic: file-usage-events
 	}
 	if cfg.KafkaUsageTopic != "env-usage-events" {
 		t.Fatalf("KafkaUsageTopic = %q, want env-usage-events", cfg.KafkaUsageTopic)
+	}
+	if !cfg.ClickHouseEnabled {
+		t.Fatal("ClickHouseEnabled = false, want environment override true")
+	}
+	if cfg.ClickHouseURL != "https://clickhouse.example.test:8123" {
+		t.Fatalf("ClickHouseURL = %q, want env URL", cfg.ClickHouseURL)
+	}
+	if cfg.ClickHouseDatabase != "env_llmgw" {
+		t.Fatalf("ClickHouseDatabase = %q, want env_llmgw", cfg.ClickHouseDatabase)
+	}
+	if cfg.ClickHouseUsername != "env_user" {
+		t.Fatalf("ClickHouseUsername = %q, want env_user", cfg.ClickHouseUsername)
+	}
+	if cfg.ClickHousePassword != "env_password" {
+		t.Fatalf("ClickHousePassword = %q, want env_password", cfg.ClickHousePassword)
 	}
 }
 
@@ -217,6 +254,19 @@ func TestLoadRejectsInvalidBoundaryValues(t *testing.T) {
 				"KAFKA_ENABLED": "true",
 			},
 		},
+		{
+			name: "clickhouse enabled is not a bool",
+			env: map[string]string{
+				"CLICKHOUSE_ENABLED": "maybe",
+			},
+		},
+		{
+			name: "clickhouse enabled with invalid url",
+			env: map[string]string{
+				"CLICKHOUSE_ENABLED": "true",
+				"CLICKHOUSE_URL":     "postgres://localhost:8123",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -253,6 +303,49 @@ kafka_usage_topic: ""
 
 	if _, err := Load(path); err == nil {
 		t.Fatal("Load returned nil error, want missing Kafka topic error")
+	}
+}
+
+func TestLoadRejectsClickHouseEnabledWithMissingDatabaseOrUsername(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "missing database",
+			content: `
+platform_bootstrap_token: bootstrap-token
+token_hash_secret: token-hash-secret
+secret_encryption_key: 0123456789abcdef0123456789abcdef
+clickhouse_enabled: true
+clickhouse_database: ""
+clickhouse_username: default
+`,
+		},
+		{
+			name: "missing username",
+			content: `
+platform_bootstrap_token: bootstrap-token
+token_hash_secret: token-hash-secret
+secret_encryption_key: 0123456789abcdef0123456789abcdef
+clickhouse_enabled: true
+clickhouse_database: llmgw
+clickhouse_username: ""
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+				t.Fatalf("write config file: %v", err)
+			}
+
+			if _, err := Load(path); err == nil {
+				t.Fatal("Load returned nil error, want invalid ClickHouse config")
+			}
+		})
 	}
 }
 
