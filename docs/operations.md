@@ -165,6 +165,21 @@ make restore-drill
 
 备份文件写入 `.backups/`，不会进入 git。详细流程见 `docs/runbooks/backup-restore.md`。
 
+## 生产上线检查
+
+可自动化的上线前检查：
+
+```bash
+make production-checks
+```
+
+需要服务栈和人工证据的检查仍单独执行：`make smoke-test`、`make load-test`、`make backup-demo`、`make restore-drill`、`make live-provider-test`。
+
+生产上线、试运行和回滚流程见：
+
+- `docs/runbooks/production-launch.md`
+- `docs/runbooks/rollback.md`
+
 ## Console
 
 Docker Compose 启动后，管理后台地址为：

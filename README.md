@@ -2,7 +2,7 @@
 
 SaaS 多租户 LLM 网关与 CostOps 平台。
 
-当前实现状态：阶段 1、阶段 2、阶段 3 任务已完成，项目具备 v0.3 CostOps 平台化能力。生产上线准备事项已整理为阶段 4 SDD，见 `docs/10_PRODUCTION_READINESS_SDD.md`。
+当前实现状态：阶段 1、阶段 2、阶段 3 任务已完成，项目具备 v0.3 CostOps 平台化能力。阶段 4 的生产上线准备能力已补齐为脚本、runbook 和检查清单；进入真实生产前仍需按 `docs/runbooks/production-launch.md` 完成目标环境证据和签核。
 
 ## 环境要求
 
@@ -98,6 +98,12 @@ make smoke-test
 make test
 ```
 
+运行可自动化的生产上线前检查：
+
+```bash
+make production-checks
+```
+
 构建管理后台：
 
 ```bash
@@ -171,6 +177,7 @@ curl -sS http://localhost:8080/v1/chat/completions \
 - Admin 操作审计、缓存事件、成本/延迟/错误率分析。
 - 可选 Kafka usage event、ClickHouse analytics、OpenTelemetry tracing。
 - Prometheus metrics。
+- 生产 magic link 邮件登录、密钥轮换、压测、告警、备份恢复、真实 Provider 联调和上线/回滚 runbook。
 
 安全边界：
 
@@ -201,6 +208,8 @@ curl http://localhost:8080/metrics
 - `docs/api.md`：当前已实现 HTTP API 参考。
 - `docs/operations.md`：本地运行与运维操作。
 - `docs/demo.md`：本地演示流程。
+- `docs/runbooks/production-launch.md`：生产上线、试运行和 go/no-go 检查清单。
+- `docs/runbooks/rollback.md`：生产回滚流程。
 - `docs/00_MASTER_SDD.md`：总体软件设计文档。
 - `docs/01_PHASE_1_V0_1_SAAS_MVP.md`：阶段 1 任务计划。
 - `docs/02_PHASE_2_V0_2_PRODUCTION_READY.md`：阶段 2 任务计划。
