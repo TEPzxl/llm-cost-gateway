@@ -1,4 +1,4 @@
-.PHONY: up down migrate-up migrate-down verify-migration verify-alert-rules seed-demo smoke-test load-test sqlc-generate test run secret-rotate console-install console-build
+.PHONY: up down migrate-up migrate-down verify-migration verify-alert-rules seed-demo smoke-test load-test backup-demo restore-drill sqlc-generate test run secret-rotate console-install console-build
 
 CONFIG_FILE ?= configs/config.example.yaml
 COMPOSE ?= docker compose -f deploy/docker-compose.yml --project-directory .
@@ -30,6 +30,13 @@ smoke-test:
 
 load-test:
 	./scripts/load-test.sh
+
+backup-demo:
+	./scripts/backup-postgres.sh
+	./scripts/backup-redis.sh
+
+restore-drill:
+	./scripts/restore-drill.sh
 
 sqlc-generate:
 	go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate

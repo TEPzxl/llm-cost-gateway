@@ -137,6 +137,22 @@ LOAD_TEST_SCENARIO=baseline LOAD_TEST_REQUESTS=20 LOAD_TEST_VUS=2 make load-test
 
 报告会写入 `.loadtest/`。详细流程见 `docs/runbooks/load-testing.md`。
 
+## Backup / Restore Drill
+
+本地备份：
+
+```bash
+make backup-demo
+```
+
+隔离恢复演练：
+
+```bash
+make restore-drill
+```
+
+备份文件写入 `.backups/`，不会进入 git。详细流程见 `docs/runbooks/backup-restore.md`。
+
 ## Console
 
 Docker Compose 启动后，管理后台地址为：

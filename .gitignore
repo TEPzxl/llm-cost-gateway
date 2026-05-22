@@ -14,3 +14,4 @@ out/
 .demo.env
 coverage/
 .loadtest/
+.backups/
