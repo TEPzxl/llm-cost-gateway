@@ -1,4 +1,4 @@
-.PHONY: up down migrate-up migrate-down verify-migration verify-alert-rules seed-demo smoke-test load-test live-provider-test backup-demo restore-drill production-checks sqlc-generate test run secret-rotate console-install console-build
+.PHONY: up down migrate-up migrate-down verify-migration verify-alert-rules seed-demo smoke-test load-test live-provider-test live-gateway-test backup-demo restore-drill production-checks sqlc-generate test run secret-rotate console-install console-build
 
 CONFIG_FILE ?= configs/config.example.yaml
 COMPOSE ?= docker compose -f deploy/docker-compose.yml --project-directory .
@@ -33,6 +33,9 @@ load-test:
 
 live-provider-test:
 	./scripts/live-provider-test.sh
+
+live-gateway-test:
+	./scripts/live-gateway-test.sh
 
 backup-demo:
 	./scripts/backup-postgres.sh

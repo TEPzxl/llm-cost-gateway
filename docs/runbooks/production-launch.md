@@ -81,6 +81,7 @@ make secret-rotate
 cp configs/live-provider.example.env .live-provider.env
 vim .live-provider.env
 make live-provider-test
+make live-gateway-test
 ```
 
 ## Go/No-Go Checklist
@@ -101,7 +102,7 @@ make live-provider-test
 | 告警规则加载 | `make verify-alert-rules`，Prometheus UI 可见规则 |  |  |  |
 | 备份可生成 | `make backup-demo` 或生产备份任务结果 |  |  |  |
 | 恢复演练通过 | `make restore-drill` 或隔离恢复报告 |  |  |  |
-| 真实 Provider 联调通过 | `make live-provider-test` 输出 |  |  |  |
+| 真实 Provider 联调通过 | `make live-provider-test`、`make live-gateway-test` 输出 |  |  |  |
 | Prompt/Response 不落库 | 抽查 request_logs、usage_records、cost_records |  |  |  |
 | 金额精度 | 成本字段保持 integer micro USD |  |  |  |
 | 回滚方案已演练 | `docs/runbooks/rollback.md` 记录 |  |  |  |

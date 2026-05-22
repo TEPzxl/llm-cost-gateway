@@ -50,6 +50,8 @@ LIVE_PROVIDER_MAX_TOKENS=16
 
 ## 执行
 
+### Adapter 联调
+
 运行：
 
 ```bash
@@ -69,10 +71,45 @@ make live-provider-test
 go test ./internal/provider/openai_compatible -run TestLiveOpenAICompatibleProvider -count=1 -v
 ```
 
+### Gateway 端到端联调
+
+先准备本地或目标环境的演示凭据：
+
+```bash
+make seed-demo
+```
+
+然后执行：
+
+```bash
+make live-gateway-test
+```
+
+该脚本会：
+
+- 读取 `.demo.env` 中的 `DEMO_ADMIN_TOKEN` 和 `DEMO_API_KEY`。
+- 创建一个临时 OpenAI-compatible Provider。
+- 创建对应 Model，价格字段使用 integer micro USD。
+- 创建唯一 `match_model` 的 RoutePolicy。
+- 通过 Gateway 发起一次非流式请求并校验 usage 与 cost。
+- 通过 Gateway 发起一次流式请求并校验 SSE data 与 `[DONE]`。
+- 查询 request logs 和 usage summary，确认真实 Provider 请求已落库并产生成本汇总。
+
+可选配置：
+
+```bash
+LIVE_PROVIDER_INPUT_PRICE_MICRO_USD_PER_1K_TOKENS=1000
+LIVE_PROVIDER_OUTPUT_PRICE_MICRO_USD_PER_1K_TOKENS=3000
+LIVE_PROVIDER_ROUTE_MODEL=live-provider-manual
+```
+
+脚本不会删除创建的 Provider、Model 和 RoutePolicy。建议在隔离测试租户中执行，或通过唯一 `LIVE_PROVIDER_ROUTE_MODEL` 标记资源后人工清理。
+
 ## 成功标准
 
 - 非流式用例通过，并且 `usage.total_tokens > 0`。
 - 流式用例通过，并且至少收到一个数据事件和一个 `[DONE]` 事件。
+- Gateway 端到端联调能在 request logs 和 usage summary 中查到对应 Provider/Model。
 - 测试输出不得包含 API Key。
 
 ## 常见失败

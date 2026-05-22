@@ -147,6 +147,13 @@ vim .live-provider.env
 make live-provider-test
 ```
 
+如需通过 Gateway 创建临时 Provider、Model、RoutePolicy 并校验日志、用量和成本汇总：
+
+```bash
+make seed-demo
+make live-gateway-test
+```
+
 详细流程见 `docs/runbooks/live-provider.md`。
 
 ## Backup / Restore Drill
