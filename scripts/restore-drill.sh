@@ -13,15 +13,15 @@ override_file="$(mktemp)"
 cat > "$override_file" <<'YAML'
 services:
   postgres:
-    ports: []
+    ports: !reset []
   redis:
-    ports: []
+    ports: !reset []
   gateway:
-    ports: []
+    ports: !reset []
   console:
-    ports: []
+    ports: !reset []
   prometheus:
-    ports: []
+    ports: !reset []
 YAML
 
 cleanup() {
