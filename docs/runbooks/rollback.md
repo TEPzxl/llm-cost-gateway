@@ -167,6 +167,7 @@ make verify-alert-rules
 
 ```bash
 make live-provider-test
+make live-gateway-test
 ```
 
 如涉及备份恢复：

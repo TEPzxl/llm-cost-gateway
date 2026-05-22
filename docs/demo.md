@@ -112,6 +112,7 @@ curl http://localhost:8080/metrics
 
 ```bash
 make live-provider-test
+make live-gateway-test
 ```
 
 ## 8. 清理
