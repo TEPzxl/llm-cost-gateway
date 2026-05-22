@@ -106,7 +106,15 @@ http://localhost:9090
 curl http://localhost:8080/metrics
 ```
 
-## 7. 清理
+## 7. 可选：真实 Provider 联调
+
+默认演示使用 Mock Provider，不消耗真实供应商额度。如需验证 OpenAI-compatible Provider，可按 `docs/runbooks/live-provider.md` 配置 `.live-provider.env` 后执行：
+
+```bash
+make live-provider-test
+```
+
+## 8. 清理
 
 停止服务：
 

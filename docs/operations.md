@@ -137,6 +137,18 @@ LOAD_TEST_SCENARIO=baseline LOAD_TEST_REQUESTS=20 LOAD_TEST_VUS=2 make load-test
 
 报告会写入 `.loadtest/`。详细流程见 `docs/runbooks/load-testing.md`。
 
+## Live Provider Test
+
+真实 OpenAI-compatible Provider 联调默认关闭。需要先复制模板并填入测试专用密钥：
+
+```bash
+cp configs/live-provider.example.env .live-provider.env
+vim .live-provider.env
+make live-provider-test
+```
+
+详细流程见 `docs/runbooks/live-provider.md`。
+
 ## Backup / Restore Drill
 
 本地备份：

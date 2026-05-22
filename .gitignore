@@ -12,6 +12,7 @@ out/
 *.tsbuildinfo
 .env
 .demo.env
+.live-provider.env
 coverage/
 .loadtest/
 .backups/
