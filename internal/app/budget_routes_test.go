@@ -6,11 +6,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/tep/llm-cost-gateway/internal/budget"
+	"github.com/tep/llm-cost-gateway/internal/ratelimit"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 )
 
@@ -64,6 +67,117 @@ func TestAdminBudgetRoutesCreateListAndStatus(t *testing.T) {
 	item := status.Items[0]
 	if item.BudgetID != created.ID || item.UsedMicroUSD != 250 || item.RemainingMicroUSD != 750 || item.Exceeded {
 		t.Fatalf("status item = %+v, want used=250 remaining=750 not exceeded", item)
+	}
+}
+
+func TestGatewayBudgetBlockPreventsConcurrentOverspend(t *testing.T) {
+	router, st, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	var providerCalls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&providerCalls, 1)
+		time.Sleep(150 * time.Millisecond)
+		writeAppOpenAIChatResponse(t, w)
+	}))
+	defer server.Close()
+
+	provider, model := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "concurrent-budget", server.URL, 1000)
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "concurrent-budget-policy",
+		MatchModel: "concurrent-budget",
+		Strategy:   "single",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: provider.ID, ModelID: model.ID, Priority: 1, Weight: 100},
+		},
+	})
+	createBudgetViaHTTP(t, router, apiKey.AdminToken, createBudgetRequest{
+		Name:          "hard-daily-budget",
+		ScopeType:     "org",
+		Period:        "daily",
+		LimitMicroUSD: 5,
+		Action:        "block",
+	})
+
+	var wg sync.WaitGroup
+	statuses := make(chan int, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rec := performChatCompletion(t, router, apiKey.Key, `{"model":"concurrent-budget","messages":[{"role":"user","content":"hello"}]}`)
+			statuses <- rec.Code
+		}()
+	}
+	wg.Wait()
+	close(statuses)
+
+	counts := map[int]int{}
+	for status := range statuses {
+		counts[status]++
+	}
+	if counts[http.StatusOK] != 1 || counts[http.StatusPaymentRequired] != 1 {
+		t.Fatalf("statuses = %+v, want one 200 and one 402", counts)
+	}
+	if calls := atomic.LoadInt32(&providerCalls); calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", calls)
+	}
+	var totalCost int64
+	if err := st.Pool.QueryRow(context.Background(), `SELECT COALESCE(sum(total_cost_micro), 0)::bigint FROM cost_records WHERE org_id = $1`, apiKey.OrgID).Scan(&totalCost); err != nil {
+		t.Fatalf("sum cost records: %v", err)
+	}
+	if totalCost != 5 {
+		t.Fatalf("total cost = %d, want 5", totalCost)
+	}
+}
+
+func TestGatewayAPIKeyQuotaBlockPreventsConcurrentOverspend(t *testing.T) {
+	router, _, fixture := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	limitedKey := createAPIKeyViaHTTP(t, router, fixture.AdminToken, createAPIKeyRequest{
+		Name:                   "limited-concurrent-key",
+		Scopes:                 []string{"chat.completions"},
+		RPMLimit:               60,
+		DailyCostLimitMicroUSD: int64Ptr(5),
+		QuotaAction:            "block",
+	})
+	var providerCalls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&providerCalls, 1)
+		time.Sleep(150 * time.Millisecond)
+		writeAppOpenAIChatResponse(t, w)
+	}))
+	defer server.Close()
+
+	provider, model := createOpenAICompatibleRouteTarget(t, router, fixture.AdminToken, "concurrent-quota", server.URL, 1000)
+	createRoutePolicyViaHTTP(t, router, fixture.AdminToken, createRoutePolicyRequest{
+		Name:       "concurrent-quota-policy",
+		MatchModel: "concurrent-quota",
+		Strategy:   "single",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: provider.ID, ModelID: model.ID, Priority: 1, Weight: 100},
+		},
+	})
+
+	var wg sync.WaitGroup
+	statuses := make(chan int, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rec := performChatCompletion(t, router, limitedKey.Key, `{"model":"concurrent-quota","messages":[{"role":"user","content":"hello"}]}`)
+			statuses <- rec.Code
+		}()
+	}
+	wg.Wait()
+	close(statuses)
+
+	counts := map[int]int{}
+	for status := range statuses {
+		counts[status]++
+	}
+	if counts[http.StatusOK] != 1 || counts[http.StatusPaymentRequired] != 1 {
+		t.Fatalf("statuses = %+v, want one 200 and one 402", counts)
+	}
+	if calls := atomic.LoadInt32(&providerCalls); calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", calls)
 	}
 }
 

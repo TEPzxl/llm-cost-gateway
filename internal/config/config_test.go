@@ -98,6 +98,9 @@ func TestLoadUsesDefaultsAndEnvironment(t *testing.T) {
 	if cfg.TracingServiceName != "llm-cost-gateway" {
 		t.Fatalf("TracingServiceName = %q, want llm-cost-gateway", cfg.TracingServiceName)
 	}
+	if !cfg.OutboundPublicOnly {
+		t.Fatal("OutboundPublicOnly = false, want true by default")
+	}
 	if cfg.PasswordlessEmailEnabled {
 		t.Fatal("PasswordlessEmailEnabled = true, want false")
 	}
@@ -127,6 +130,7 @@ func TestLoadReadsConfigFileAndEnvironmentOverrides(t *testing.T) {
 	t.Setenv("TRACING_OTLP_ENDPOINT", "https://otel.example.test:4318")
 	t.Setenv("TRACING_INSECURE", "false")
 	t.Setenv("TRACING_SERVICE_NAME", "env-gateway")
+	t.Setenv("OUTBOUND_PUBLIC_ONLY", "false")
 	t.Setenv("SECRET_ENCRYPTION_KEY_VERSION", "2")
 	t.Setenv("SECRET_ENCRYPTION_KEYRING", "1:0123456789abcdef0123456789abcdef,2:fedcba98765432100123456789abcdef")
 	t.Setenv("AUTH_PASSWORDLESS_EMAIL_ENABLED", "true")
@@ -171,6 +175,7 @@ tracing_enabled: false
 tracing_otlp_endpoint: localhost:4318
 tracing_insecure: true
 tracing_service_name: file-gateway
+outbound_public_only: true
 auth_passwordless_email_enabled: false
 auth_magic_link_base_url: https://file-console.example.test/login
 auth_magic_link_ttl_seconds: 900
@@ -267,6 +272,9 @@ smtp_tls_mode: starttls
 	}
 	if cfg.TracingServiceName != "env-gateway" {
 		t.Fatalf("TracingServiceName = %q, want env-gateway", cfg.TracingServiceName)
+	}
+	if cfg.OutboundPublicOnly {
+		t.Fatal("OutboundPublicOnly = true, want environment override false")
 	}
 	if !cfg.PasswordlessEmailEnabled {
 		t.Fatal("PasswordlessEmailEnabled = false, want environment override true")
@@ -522,6 +530,12 @@ func TestLoadRejectsInvalidBoundaryValues(t *testing.T) {
 			name: "secret keyring invalid entry",
 			env: map[string]string{
 				"SECRET_ENCRYPTION_KEYRING": "not-a-version",
+			},
+		},
+		{
+			name: "outbound public only is not a bool",
+			env: map[string]string{
+				"OUTBOUND_PUBLIC_ONLY": "sometimes",
 			},
 		},
 		{

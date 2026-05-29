@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 )
 
@@ -24,6 +25,7 @@ var (
 
 type SessionService struct {
 	queries     *db.Queries
+	store       *store.Store
 	hashKeyRing *TokenHashKeyRing
 	now         func() time.Time
 	ttl         time.Duration
@@ -51,6 +53,15 @@ func WithSessionHashKeyRing(keyRing *TokenHashKeyRing) SessionServiceOption {
 	return func(s *SessionService) {
 		if keyRing != nil {
 			s.hashKeyRing = keyRing
+		}
+	}
+}
+
+func WithSessionStore(st *store.Store) SessionServiceOption {
+	return func(s *SessionService) {
+		if st != nil {
+			s.store = st
+			s.queries = st.Queries
 		}
 	}
 }
@@ -122,7 +133,27 @@ func (s *SessionService) UpsertMember(ctx context.Context, params UpsertMemberPa
 	}
 
 	now := s.now()
-	user, err := s.queries.UpsertUserByEmail(ctx, db.UpsertUserByEmailParams{
+	if s.store == nil {
+		return s.upsertMemberWithQueries(ctx, s.queries, params.OrgID, email, displayName, role, now)
+	}
+
+	var result UpsertMemberResult
+	err := s.store.ExecTx(ctx, func(q *db.Queries) error {
+		created, err := s.upsertMemberWithQueries(ctx, q, params.OrgID, email, displayName, role, now)
+		if err != nil {
+			return err
+		}
+		result = created
+		return nil
+	})
+	if err != nil {
+		return UpsertMemberResult{}, err
+	}
+	return result, nil
+}
+
+func (s *SessionService) upsertMemberWithQueries(ctx context.Context, q *db.Queries, orgID uuid.UUID, email string, displayName string, role string, now time.Time) (UpsertMemberResult, error) {
+	user, err := q.UpsertUserByEmail(ctx, db.UpsertUserByEmailParams{
 		ID:          uuid.New(),
 		Email:       email,
 		DisplayName: displayName,
@@ -133,9 +164,9 @@ func (s *SessionService) UpsertMember(ctx context.Context, params UpsertMemberPa
 	if err != nil {
 		return UpsertMemberResult{}, err
 	}
-	membership, err := s.queries.UpsertOrgMembership(ctx, db.UpsertOrgMembershipParams{
+	membership, err := q.UpsertOrgMembership(ctx, db.UpsertOrgMembershipParams{
 		ID:        uuid.New(),
-		OrgID:     params.OrgID,
+		OrgID:     orgID,
 		UserID:    user.ID,
 		Role:      role,
 		Status:    "active",

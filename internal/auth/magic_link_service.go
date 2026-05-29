@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	MagicLinkPlainPrefix = "llmgw_magic_"
-	defaultMagicLinkTTL  = 15 * time.Minute
+	MagicLinkPlainPrefix             = "llmgw_magic_"
+	defaultMagicLinkTTL              = 15 * time.Minute
+	defaultMagicLinkRateLimitPerHour = 3
 )
 
 var ErrInvalidMagicLink = errors.New("invalid magic link")
@@ -104,11 +105,19 @@ func (s *MagicLinkService) Request(ctx context.Context, params MagicLinkRequestP
 		return err
 	}
 
+	now := s.now()
+	limited, err := s.recentRequestLimitExceeded(ctx, membership.OrgID, membership.UserID, membership.Email, now.Add(-time.Hour))
+	if err != nil {
+		return err
+	}
+	if limited {
+		return nil
+	}
+
 	token, err := generateToken(MagicLinkPlainPrefix)
 	if err != nil {
 		return err
 	}
-	now := s.now()
 	if _, err := s.store.Queries.CreateMagicLinkToken(ctx, db.CreateMagicLinkTokenParams{
 		ID:          uuid.New(),
 		OrgID:       membership.OrgID,
@@ -128,6 +137,22 @@ func (s *MagicLinkService) Request(ctx context.Context, params MagicLinkRequestP
 		Subject:  "LLM Cost Gateway 登录链接",
 		TextBody: fmt.Sprintf("请在 %s 前打开以下链接登录：\n\n%s", now.Add(s.ttl).Format(time.RFC3339), s.magicLinkURL(token)),
 	})
+}
+
+func (s *MagicLinkService) recentRequestLimitExceeded(ctx context.Context, orgID uuid.UUID, userID uuid.UUID, email string, since time.Time) (bool, error) {
+	var count int
+	err := s.store.Pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM magic_link_tokens
+		WHERE org_id = $1
+		  AND user_id = $2
+		  AND lower(email) = lower($3)
+		  AND created_at >= $4
+	`, orgID, userID, email, since).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count >= defaultMagicLinkRateLimitPerHour, nil
 }
 
 func (s *MagicLinkService) Consume(ctx context.Context, params MagicLinkConsumeParams) (PasswordlessMockLoginResult, error) {

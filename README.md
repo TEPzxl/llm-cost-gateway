@@ -124,7 +124,7 @@ cd web/console && npm test
 http://localhost:3000
 ```
 
-使用 `.demo.env` 中的 `DEMO_ADMIN_TOKEN` 登录。管理后台把 token 存在当前浏览器会话的 `sessionStorage` 中，不写入 `localStorage`。生产环境可通过 `AUTH_PASSWORDLESS_EMAIL_ENABLED=true` 和 SMTP 配置启用真实邮件免密登录。
+使用 `.demo.env` 中的 `DEMO_ADMIN_TOKEN` 登录。管理后台把 token 存在当前浏览器会话的 `sessionStorage` 中，不写入 `localStorage`。生产环境可通过后端 `AUTH_PASSWORDLESS_EMAIL_ENABLED=true`、SMTP 配置以及 Console 构建参数 `NEXT_PUBLIC_ENABLE_PASSWORDLESS_EMAIL=true` 启用真实邮件免密登录。
 
 已实现页面：
 
@@ -253,6 +253,7 @@ curl http://localhost:8080/metrics
 - `TRACING_OTLP_ENDPOINT`
 - `TRACING_INSECURE`
 - `TRACING_SERVICE_NAME`
+- `OUTBOUND_PUBLIC_ONLY`
 - `AUTH_PASSWORDLESS_EMAIL_ENABLED`
 - `AUTH_MAGIC_LINK_BASE_URL`
 - `AUTH_MAGIC_LINK_TTL_SECONDS`
@@ -266,5 +267,10 @@ curl http://localhost:8080/metrics
 - `LIVE_PROVIDER_BASE_URL`
 - `LIVE_PROVIDER_API_KEY`
 - `LIVE_PROVIDER_MODEL`
+
+Console 构建参数：
+
+- `NEXT_PUBLIC_ENABLE_PASSWORDLESS_EMAIL`
+- `NEXT_PUBLIC_ENABLE_PASSWORDLESS_MOCK`
 
 `SECRET_ENCRYPTION_KEY` 必须是 32 字节，用于 AES-256。

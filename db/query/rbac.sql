@@ -12,7 +12,6 @@ INSERT INTO users (
 ON CONFLICT (email)
 DO UPDATE SET
   display_name = EXCLUDED.display_name,
-  status = CASE WHEN users.status = 'disabled' THEN 'active' ELSE users.status END,
   updated_at = EXCLUDED.updated_at
 RETURNING *;
 

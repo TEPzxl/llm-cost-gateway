@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: llmgw
+          POSTGRES_PASSWORD: llmgw
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U llmgw -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TEST_POSTGRES_ADMIN_URL: postgres://llmgw:llmgw@localhost:5432/postgres?sslmode=disable
+      TEST_REDIS_URL: redis://localhost:6379/15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/console/package-lock.json
+
+      - name: Run backend tests
+        run: go test ./cmd/... ./internal/...
+
+      - name: Install console dependencies
+        working-directory: web/console
+        run: npm ci
+
+      - name: Run console tests
+        working-directory: web/console
+        run: npm test
+
+      - name: Build console
+        working-directory: web/console
+        env:
+          NEXT_PUBLIC_ENABLE_PASSWORDLESS_EMAIL: "true"
+        run: npm run build
+
+      - name: Verify alert rules
+        run: make verify-alert-rules

@@ -51,6 +51,7 @@ type RouterConfig struct {
 	EmbeddingAdapter         embedding.Adapter
 	SemanticCacheThreshold   float64
 	SemanticCacheMaxTemp     float64
+	OutboundPublicOnly       bool
 	PasswordlessEmailEnabled bool
 	MagicLinkBaseURL         string
 	MagicLinkTTL             time.Duration
@@ -114,7 +115,7 @@ func registerGatewayRoutes(router *gin.Engine, cfg RouterConfig) {
 		gatewayservice.WithPromptCache(cfg.PromptCache),
 		gatewayservice.WithSemanticCache(cfg.SemanticCache, cfg.EmbeddingAdapter, cfg.SemanticCacheThreshold, cfg.SemanticCacheMaxTemp),
 		gatewayservice.WithSecretKeyRing(cfg.SecretKeyRing),
-		gatewayservice.WithPublicOutboundOnly(cfg.AppEnv == "production"),
+		gatewayservice.WithPublicOutboundOnly(cfg.OutboundPublicOnly),
 		gatewayservice.WithLogger(cfg.Logger),
 	)
 	chatHandler := gatewayhandler.NewChatCompletionsHandler(chatService)
@@ -139,7 +140,7 @@ func registerPlatformRoutes(router *gin.Engine, cfg RouterConfig) {
 
 func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	adminTokenService := auth.NewAdminTokenService(cfg.Store.Queries, cfg.TokenHashSecret, auth.WithAdminTokenHashKeyRing(cfg.TokenHashKeyRing))
-	sessionService := auth.NewSessionService(cfg.Store.Queries, cfg.TokenHashSecret, auth.WithSessionHashKeyRing(cfg.TokenHashKeyRing))
+	sessionService := auth.NewSessionService(cfg.Store.Queries, cfg.TokenHashSecret, auth.WithSessionHashKeyRing(cfg.TokenHashKeyRing), auth.WithSessionStore(cfg.Store))
 	var magicLinkService *auth.MagicLinkService
 	if cfg.PasswordlessEmailEnabled && cfg.EmailSender != nil {
 		magicLinkService = auth.NewMagicLinkService(cfg.Store, cfg.TokenHashSecret, cfg.EmailSender, auth.MagicLinkConfig{
@@ -148,7 +149,7 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 		}, auth.WithMagicLinkHashKeyRing(cfg.TokenHashKeyRing))
 	}
 	apiKeyService := auth.NewAPIKeyService(cfg.Store.Queries, cfg.TokenHashSecret, auth.WithAPIKeyHashKeyRing(cfg.TokenHashKeyRing))
-	publicOutboundOnly := cfg.AppEnv == "production"
+	publicOutboundOnly := cfg.OutboundPublicOnly
 	providerService := provider.NewService(cfg.Store, cfg.SecretEncryptionKey, provider.WithPublicOutboundOnly(publicOutboundOnly), provider.WithSecretKeyRing(cfg.SecretKeyRing))
 	providerHealthService := provider.NewHealthService(cfg.Store, cfg.SecretEncryptionKey, provider.WithHealthPublicOutboundOnly(publicOutboundOnly), provider.WithHealthSecretKeyRing(cfg.SecretKeyRing))
 	pricingService := costing.NewPricingService(cfg.Store)

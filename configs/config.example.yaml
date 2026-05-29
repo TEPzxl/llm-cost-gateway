@@ -29,6 +29,7 @@ tracing_enabled: false
 tracing_otlp_endpoint: localhost:4318
 tracing_insecure: true
 tracing_service_name: llm-cost-gateway
+outbound_public_only: true
 auth_passwordless_email_enabled: false
 auth_magic_link_base_url: http://localhost:3000
 auth_magic_link_ttl_seconds: 900

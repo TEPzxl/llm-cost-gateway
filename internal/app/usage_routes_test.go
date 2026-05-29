@@ -45,6 +45,39 @@ func TestAdminUsageSummaryAfterSuccessfulGatewayRequest(t *testing.T) {
 	}
 }
 
+func TestAdminUsageSummaryCountsResolvedProviderErrors(t *testing.T) {
+	router, _, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":{"message":"temporary failure"}}`))
+	}))
+	defer server.Close()
+
+	provider, model := createOpenAICompatibleRouteTarget(t, router, apiKey.AdminToken, "summary-error", server.URL, 100)
+	createRoutePolicyViaHTTP(t, router, apiKey.AdminToken, createRoutePolicyRequest{
+		Name:       "summary-error-policy",
+		MatchModel: "summary-error",
+		Strategy:   "single",
+		Targets: []createRouteTargetRequest{
+			{ProviderID: provider.ID, ModelID: model.ID, Priority: 1, Weight: 100},
+		},
+	})
+
+	rec := performChatCompletion(t, router, apiKey.Key, `{"model":"summary-error","messages":[{"role":"user","content":"hello"}]}`)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("chat completion status = %d, want %d; body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	summary := getUsageSummaryViaHTTP(t, router, apiKey.AdminToken, "group_by=model")
+	if summary.GroupBy != "model" || len(summary.Items) != 1 {
+		t.Fatalf("summary = %+v, want one model item", summary)
+	}
+	item := summary.Items[0]
+	if item.RequestCount != 1 || item.SuccessCount != 0 || item.ErrorCount != 1 || item.TotalTokens != 0 || item.TotalCostMicroUSD != 0 {
+		t.Fatalf("summary item = %+v, want request=1 success=0 error=1 tokens=0 cost=0", item)
+	}
+}
+
 func TestAdminAnalyticsRoutesAfterGatewayRequests(t *testing.T) {
 	router, _, apiKey := newGatewayChatTestRouter(t, fakeGatewayLimiter{decision: ratelimit.Decision{Allowed: true}})
 

@@ -35,7 +35,7 @@ INSERT INTO cost_records (
 
 -- name: UsageSummaryByProvider :many
 SELECT
-  ur.provider_id,
+  rl.provider_id,
   count(*)::bigint AS request_count,
   count(*) FILTER (WHERE rl.status IN ('success', 'budget_warned'))::bigint AS success_count,
   count(*) FILTER (WHERE rl.status NOT IN ('success', 'budget_warned'))::bigint AS error_count,
@@ -44,22 +44,23 @@ SELECT
   COALESCE(sum(ur.total_tokens), 0)::bigint AS total_tokens,
   COALESCE(sum(cr.total_cost_micro), 0)::bigint AS total_cost_micro_usd,
   COALESCE(avg(rl.latency_ms), 0)::double precision AS avg_latency_ms
-FROM usage_records ur
-JOIN request_logs rl
-  ON rl.org_id = ur.org_id
- AND rl.id = ur.request_log_id
+FROM request_logs rl
+LEFT JOIN usage_records ur
+  ON ur.org_id = rl.org_id
+ AND ur.request_log_id = rl.id
 LEFT JOIN cost_records cr
   ON cr.org_id = ur.org_id
  AND cr.usage_record_id = ur.id
-WHERE ur.org_id = $1
-  AND ur.created_at >= $2
-  AND ur.created_at < $3
-GROUP BY ur.provider_id
+WHERE rl.org_id = $1
+  AND rl.provider_id IS NOT NULL
+  AND rl.started_at >= $2
+  AND rl.started_at < $3
+GROUP BY rl.provider_id
 ORDER BY total_cost_micro_usd DESC, request_count DESC;
 
 -- name: UsageSummaryByModel :many
 SELECT
-  ur.model_id,
+  rl.model_id,
   count(*)::bigint AS request_count,
   count(*) FILTER (WHERE rl.status IN ('success', 'budget_warned'))::bigint AS success_count,
   count(*) FILTER (WHERE rl.status NOT IN ('success', 'budget_warned'))::bigint AS error_count,
@@ -68,22 +69,23 @@ SELECT
   COALESCE(sum(ur.total_tokens), 0)::bigint AS total_tokens,
   COALESCE(sum(cr.total_cost_micro), 0)::bigint AS total_cost_micro_usd,
   COALESCE(avg(rl.latency_ms), 0)::double precision AS avg_latency_ms
-FROM usage_records ur
-JOIN request_logs rl
-  ON rl.org_id = ur.org_id
- AND rl.id = ur.request_log_id
+FROM request_logs rl
+LEFT JOIN usage_records ur
+  ON ur.org_id = rl.org_id
+ AND ur.request_log_id = rl.id
 LEFT JOIN cost_records cr
   ON cr.org_id = ur.org_id
  AND cr.usage_record_id = ur.id
-WHERE ur.org_id = $1
-  AND ur.created_at >= $2
-  AND ur.created_at < $3
-GROUP BY ur.model_id
+WHERE rl.org_id = $1
+  AND rl.model_id IS NOT NULL
+  AND rl.started_at >= $2
+  AND rl.started_at < $3
+GROUP BY rl.model_id
 ORDER BY total_cost_micro_usd DESC, request_count DESC;
 
 -- name: UsageSummaryByAPIKey :many
 SELECT
-  ur.api_key_id,
+  rl.api_key_id,
   count(*)::bigint AS request_count,
   count(*) FILTER (WHERE rl.status IN ('success', 'budget_warned'))::bigint AS success_count,
   count(*) FILTER (WHERE rl.status NOT IN ('success', 'budget_warned'))::bigint AS error_count,
@@ -92,15 +94,16 @@ SELECT
   COALESCE(sum(ur.total_tokens), 0)::bigint AS total_tokens,
   COALESCE(sum(cr.total_cost_micro), 0)::bigint AS total_cost_micro_usd,
   COALESCE(avg(rl.latency_ms), 0)::double precision AS avg_latency_ms
-FROM usage_records ur
-JOIN request_logs rl
-  ON rl.org_id = ur.org_id
- AND rl.id = ur.request_log_id
+FROM request_logs rl
+LEFT JOIN usage_records ur
+  ON ur.org_id = rl.org_id
+ AND ur.request_log_id = rl.id
 LEFT JOIN cost_records cr
   ON cr.org_id = ur.org_id
  AND cr.usage_record_id = ur.id
-WHERE ur.org_id = $1
-  AND ur.created_at >= $2
-  AND ur.created_at < $3
-GROUP BY ur.api_key_id
+WHERE rl.org_id = $1
+  AND rl.api_key_id IS NOT NULL
+  AND rl.started_at >= $2
+  AND rl.started_at < $3
+GROUP BY rl.api_key_id
 ORDER BY total_cost_micro_usd DESC, request_count DESC;

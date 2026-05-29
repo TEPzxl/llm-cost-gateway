@@ -143,6 +143,7 @@ func newWithDependencies(cfg Config, logger *zap.Logger, st *store.Store, redisC
 		EmbeddingAdapter:         embedding.NewMockAdapter(),
 		SemanticCacheThreshold:   cfg.SemanticCacheThreshold,
 		SemanticCacheMaxTemp:     cfg.SemanticCacheMaxTemp,
+		OutboundPublicOnly:       cfg.OutboundPublicOnly,
 		PasswordlessEmailEnabled: cfg.PasswordlessEmailEnabled,
 		MagicLinkBaseURL:         cfg.MagicLinkBaseURL,
 		MagicLinkTTL:             time.Duration(cfg.MagicLinkTTLSeconds) * time.Second,

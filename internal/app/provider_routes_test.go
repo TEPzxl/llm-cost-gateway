@@ -12,7 +12,10 @@ import (
 	"github.com/google/uuid"
 	secretcrypto "github.com/tep/llm-cost-gateway/internal/crypto"
 	"github.com/tep/llm-cost-gateway/internal/domain"
+	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
+	"github.com/tep/llm-cost-gateway/internal/testutil"
+	"go.uber.org/zap"
 )
 
 func TestAdminProviderRoutesCreateMockAndOpenAIProvider(t *testing.T) {
@@ -86,6 +89,37 @@ func TestAdminProviderRoutesCreateMockAndOpenAIProvider(t *testing.T) {
 		if _, ok := item["api_key"]; ok {
 			t.Fatal("list providers response includes api_key")
 		}
+	}
+}
+
+func TestAdminProviderRoutesRejectPrivateProviderWhenOutboundPublicOnly(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.OpenPostgres(t, ctx)
+	st := store.New(pool)
+	resetTask5TestDatabase(t, ctx, st)
+	router := NewRouter(RouterConfig{
+		AppEnv:                 "test",
+		PlatformBootstrapToken: "bootstrap-token",
+		TokenHashSecret:        "token-hash-secret",
+		SecretEncryptionKey:    "0123456789abcdef0123456789abcdef",
+		Store:                  st,
+		OutboundPublicOnly:     true,
+	}, zap.NewNop())
+	orgID := createOrgViaHTTP(t, router, "Private Provider Org", "private-provider-org")
+	adminToken := createAdminTokenViaHTTP(t, router, orgID)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/admin/providers",
+		strings.NewReader(`{"name":"private-provider","type":"openai_compatible","base_url":"https://127.0.0.1:8443/v1","api_key":"secret","timeout_ms":30000}`),
+	)
+	req.Header.Set("Authorization", "Bearer "+adminToken.Token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/v1/admin/providers status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
 }
 

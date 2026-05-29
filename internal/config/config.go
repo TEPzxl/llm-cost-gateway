@@ -45,6 +45,7 @@ type Config struct {
 	TracingOTLPEndpoint        string   `yaml:"tracing_otlp_endpoint"`
 	TracingInsecure            bool     `yaml:"tracing_insecure"`
 	TracingServiceName         string   `yaml:"tracing_service_name"`
+	OutboundPublicOnly         bool     `yaml:"outbound_public_only"`
 	PasswordlessEmailEnabled   bool     `yaml:"auth_passwordless_email_enabled"`
 	MagicLinkBaseURL           string   `yaml:"auth_magic_link_base_url"`
 	MagicLinkTTLSeconds        int      `yaml:"auth_magic_link_ttl_seconds"`
@@ -213,6 +214,7 @@ func defaultConfig() Config {
 		TracingOTLPEndpoint:        "localhost:4318",
 		TracingInsecure:            true,
 		TracingServiceName:         "llm-cost-gateway",
+		OutboundPublicOnly:         true,
 		PasswordlessEmailEnabled:   false,
 		MagicLinkBaseURL:           "http://localhost:3000",
 		MagicLinkTTLSeconds:        900,
@@ -351,6 +353,13 @@ func applyEnv(cfg *Config) error {
 		cfg.TracingInsecure = insecure
 	}
 	setStringFromEnv("TRACING_SERVICE_NAME", &cfg.TracingServiceName)
+	if value := os.Getenv("OUTBOUND_PUBLIC_ONLY"); value != "" {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("parse OUTBOUND_PUBLIC_ONLY: %w", err)
+		}
+		cfg.OutboundPublicOnly = enabled
+	}
 	if value := os.Getenv("AUTH_PASSWORDLESS_EMAIL_ENABLED"); value != "" {
 		enabled, err := strconv.ParseBool(value)
 		if err != nil {

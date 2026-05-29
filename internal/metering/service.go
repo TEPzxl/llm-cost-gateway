@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/tep/llm-cost-gateway/internal/analytics"
 	"github.com/tep/llm-cost-gateway/internal/costing"
 	"github.com/tep/llm-cost-gateway/internal/domain"
 	"github.com/tep/llm-cost-gateway/internal/events"
+	"github.com/tep/llm-cost-gateway/internal/limits"
 	"github.com/tep/llm-cost-gateway/internal/observability"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
@@ -171,7 +173,7 @@ func (s *Service) RecordSuccess(ctx context.Context, input RecordSuccessInput) (
 	}
 
 	var result RecordSuccessResult
-	err := s.store.ExecTx(ctx, func(q *db.Queries) error {
+	err := s.store.ExecTxRaw(ctx, func(tx pgx.Tx, q *db.Queries) error {
 		startedAt := nonZeroTime(input.StartedAt, s.now())
 		completedAt := nonZeroTime(input.CompletedAt, s.now())
 		requestLog, err := q.InsertRequestLog(ctx, db.InsertRequestLogParams{
@@ -251,6 +253,10 @@ func (s *Service) RecordSuccess(ctx context.Context, input RecordSuccessInput) (
 			CreatedAt:        completedAt,
 		})
 		if err != nil {
+			return err
+		}
+
+		if err := limits.SettleTx(ctx, tx, input.RequestID, costRecord.TotalCostMicro, completedAt); err != nil {
 			return err
 		}
 

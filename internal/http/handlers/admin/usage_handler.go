@@ -88,15 +88,18 @@ func (h *UsageHandler) Summary(c *gin.Context) {
 func (h *UsageHandler) summaryByProvider(c *gin.Context, orgID uuid.UUID, window timeWindow) ([]usageSummaryItem, error) {
 	rows, err := h.queries.UsageSummaryByProvider(c.Request.Context(), db.UsageSummaryByProviderParams{
 		OrgID:       orgID,
-		CreatedAt:   window.from,
-		CreatedAt_2: window.to,
+		StartedAt:   window.from,
+		StartedAt_2: window.to,
 	})
 	if err != nil {
 		return nil, err
 	}
 	items := make([]usageSummaryItem, 0, len(rows))
 	for _, row := range rows {
-		providerID := row.ProviderID
+		if row.ProviderID == nil {
+			continue
+		}
+		providerID := *row.ProviderID
 		item := usageSummaryItem{
 			ProviderID:           &providerID,
 			RequestCount:         row.RequestCount,
@@ -108,7 +111,7 @@ func (h *UsageHandler) summaryByProvider(c *gin.Context, orgID uuid.UUID, window
 			TotalCostMicroUSD:    row.TotalCostMicroUsd,
 			AverageLatencyMillis: row.AvgLatencyMs,
 		}
-		if provider, err := h.queries.GetProvider(c.Request.Context(), db.GetProviderParams{OrgID: orgID, ID: row.ProviderID}); err == nil {
+		if provider, err := h.queries.GetProvider(c.Request.Context(), db.GetProviderParams{OrgID: orgID, ID: providerID}); err == nil {
 			item.ProviderName = &provider.Name
 		}
 		items = append(items, item)
@@ -119,15 +122,18 @@ func (h *UsageHandler) summaryByProvider(c *gin.Context, orgID uuid.UUID, window
 func (h *UsageHandler) summaryByModel(c *gin.Context, orgID uuid.UUID, window timeWindow) ([]usageSummaryItem, error) {
 	rows, err := h.queries.UsageSummaryByModel(c.Request.Context(), db.UsageSummaryByModelParams{
 		OrgID:       orgID,
-		CreatedAt:   window.from,
-		CreatedAt_2: window.to,
+		StartedAt:   window.from,
+		StartedAt_2: window.to,
 	})
 	if err != nil {
 		return nil, err
 	}
 	items := make([]usageSummaryItem, 0, len(rows))
 	for _, row := range rows {
-		modelID := row.ModelID
+		if row.ModelID == nil {
+			continue
+		}
+		modelID := *row.ModelID
 		item := usageSummaryItem{
 			ModelID:              &modelID,
 			RequestCount:         row.RequestCount,
@@ -139,7 +145,7 @@ func (h *UsageHandler) summaryByModel(c *gin.Context, orgID uuid.UUID, window ti
 			TotalCostMicroUSD:    row.TotalCostMicroUsd,
 			AverageLatencyMillis: row.AvgLatencyMs,
 		}
-		if model, err := h.queries.GetModel(c.Request.Context(), db.GetModelParams{OrgID: orgID, ID: row.ModelID}); err == nil {
+		if model, err := h.queries.GetModel(c.Request.Context(), db.GetModelParams{OrgID: orgID, ID: modelID}); err == nil {
 			item.ModelName = &model.DisplayName
 		}
 		items = append(items, item)
@@ -150,15 +156,18 @@ func (h *UsageHandler) summaryByModel(c *gin.Context, orgID uuid.UUID, window ti
 func (h *UsageHandler) summaryByAPIKey(c *gin.Context, orgID uuid.UUID, window timeWindow) ([]usageSummaryItem, error) {
 	rows, err := h.queries.UsageSummaryByAPIKey(c.Request.Context(), db.UsageSummaryByAPIKeyParams{
 		OrgID:       orgID,
-		CreatedAt:   window.from,
-		CreatedAt_2: window.to,
+		StartedAt:   window.from,
+		StartedAt_2: window.to,
 	})
 	if err != nil {
 		return nil, err
 	}
 	items := make([]usageSummaryItem, 0, len(rows))
 	for _, row := range rows {
-		apiKeyID := row.ApiKeyID
+		if row.ApiKeyID == nil {
+			continue
+		}
+		apiKeyID := *row.ApiKeyID
 		item := usageSummaryItem{
 			APIKeyID:             &apiKeyID,
 			RequestCount:         row.RequestCount,
@@ -170,7 +179,7 @@ func (h *UsageHandler) summaryByAPIKey(c *gin.Context, orgID uuid.UUID, window t
 			TotalCostMicroUSD:    row.TotalCostMicroUsd,
 			AverageLatencyMillis: row.AvgLatencyMs,
 		}
-		if apiKey, err := h.queries.GetAPIKey(c.Request.Context(), db.GetAPIKeyParams{OrgID: orgID, ID: row.ApiKeyID}); err == nil {
+		if apiKey, err := h.queries.GetAPIKey(c.Request.Context(), db.GetAPIKeyParams{OrgID: orgID, ID: apiKeyID}); err == nil {
 			item.APIKeyName = &apiKey.Name
 		}
 		items = append(items, item)

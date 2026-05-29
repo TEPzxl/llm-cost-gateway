@@ -65,6 +65,46 @@ func TestSessionServiceUpsertsAndListsMembers(t *testing.T) {
 	}
 }
 
+func TestSessionServiceUpsertMemberDoesNotReactivateDisabledUser(t *testing.T) {
+	ctx := context.Background()
+	st := openAuthTestStore(t, ctx)
+	resetAuthTestDatabase(t, ctx, st)
+	org := createAuthTestOrganization(t, ctx, st, "auth-disabled-user")
+
+	service := NewSessionService(st.Queries, "session-hash-secret")
+	created, err := service.UpsertMember(ctx, UpsertMemberParams{
+		OrgID:       org.ID,
+		Email:       "disabled@example.com",
+		DisplayName: "Disabled",
+		Role:        RoleViewer,
+	})
+	if err != nil {
+		t.Fatalf("UpsertMember returned error: %v", err)
+	}
+	if _, err := st.Pool.Exec(ctx, `UPDATE users SET status = 'disabled' WHERE id = $1`, created.User.ID); err != nil {
+		t.Fatalf("disable user: %v", err)
+	}
+
+	updated, err := service.UpsertMember(ctx, UpsertMemberParams{
+		OrgID:       org.ID,
+		Email:       "disabled@example.com",
+		DisplayName: "Still Disabled",
+		Role:        RoleAdmin,
+	})
+	if err != nil {
+		t.Fatalf("UpsertMember disabled user returned error: %v", err)
+	}
+	if updated.User.Status != "disabled" {
+		t.Fatalf("updated user status = %q, want disabled", updated.User.Status)
+	}
+	if _, err := service.PasswordlessMockLogin(ctx, PasswordlessMockLoginParams{
+		OrgSlug: org.Slug,
+		Email:   "disabled@example.com",
+	}); !errors.Is(err, ErrMembershipNotFound) {
+		t.Fatalf("PasswordlessMockLogin disabled user error = %v, want %v", err, ErrMembershipNotFound)
+	}
+}
+
 func TestSessionServicePasswordlessMockLoginAuthenticatesSession(t *testing.T) {
 	ctx := context.Background()
 	st := openAuthTestStore(t, ctx)

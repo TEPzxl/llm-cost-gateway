@@ -90,6 +90,7 @@ services:
       TRACING_OTLP_ENDPOINT: otel-collector:4318
       TRACING_INSECURE: "true"
       TRACING_SERVICE_NAME: llm-cost-gateway
+      OUTBOUND_PUBLIC_ONLY: "true"
     ports:
       - "8080:8080"
     depends_on:
@@ -104,6 +105,8 @@ services:
       dockerfile: deploy/console.Dockerfile
       args:
         API_PROXY_TARGET: http://gateway:8080
+        NEXT_PUBLIC_ENABLE_PASSWORDLESS_EMAIL: ${NEXT_PUBLIC_ENABLE_PASSWORDLESS_EMAIL:-false}
+        NEXT_PUBLIC_ENABLE_PASSWORDLESS_MOCK: ${NEXT_PUBLIC_ENABLE_PASSWORDLESS_MOCK:-false}
     environment:
       NODE_ENV: production
       PORT: "3000"

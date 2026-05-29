@@ -24,6 +24,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/domain"
 	"github.com/tep/llm-cost-gateway/internal/embedding"
 	"github.com/tep/llm-cost-gateway/internal/events"
+	"github.com/tep/llm-cost-gateway/internal/limits"
 	"github.com/tep/llm-cost-gateway/internal/metering"
 	"github.com/tep/llm-cost-gateway/internal/netutil"
 	"github.com/tep/llm-cost-gateway/internal/observability"
@@ -39,6 +40,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const defaultReservationCompletionTokens int64 = 4096
+
 type ChatService struct {
 	store               *store.Store
 	resolver            *routing.Resolver
@@ -47,6 +50,7 @@ type ChatService struct {
 	alerts              *budget.AlertService
 	anomalies           *anomaly.Service
 	apiKeyQuotas        *auth.APIKeyQuotaService
+	costReservations    *limits.ReservationService
 	contentPolicies     *contentpolicy.Service
 	piiDetector         *contentpolicy.Detector
 	metering            *metering.Service
@@ -233,6 +237,7 @@ func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observ
 		alerts:              budget.NewAlertService(st),
 		anomalies:           anomaly.NewService(st),
 		apiKeyQuotas:        auth.NewAPIKeyQuotaService(st.Queries),
+		costReservations:    limits.NewReservationService(st),
 		contentPolicies:     contentpolicy.NewService(st),
 		piiDetector:         contentpolicy.NewDetector(),
 		metering:            metering.NewService(st, costing.NewCalculator()),
@@ -419,6 +424,19 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 	} else if semanticCandidate.skipReason != "" {
 		s.recordSemanticCacheEvent(ctx, input.Principal.OrgID, nil, "semantic_skip", request.Model, semanticCandidate.cacheKeyHash, semanticCandidate.messagesHash, semanticCandidate.skipReason)
 	}
+	reservationActive, err := s.reserveProviderCost(ctx, input, request, modelsFromResolvedTargets(resolved.Targets), budgetCheck, quotaCheck, contentDecision, startedAt)
+	if err != nil {
+		return ChatResult{}, err
+	}
+	reservationSettled := false
+	if reservationActive {
+		defer func() {
+			if !reservationSettled {
+				_ = s.costReservations.Release(context.Background(), input.RequestID)
+			}
+		}()
+	}
+
 	var attempts []providerAttemptMetadata
 	var selected routing.ResolvedTarget
 	var providerStarted time.Time
@@ -545,6 +563,7 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput) (ChatResult, er
 		recordTracingError(span, domain.CodeInternalError, err)
 		return ChatResult{}, err
 	}
+	reservationSettled = true
 	if cacheable {
 		cached := promptcache.CachedChatResponse{
 			ProviderID:    selected.Provider.ID,
@@ -959,6 +978,83 @@ func pgText(value string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: value, Valid: true}
+}
+
+func (s *ChatService) reserveProviderCost(ctx context.Context, input ChatInput, request ChatCompletionRequest, models []db.Model, budgetCheck budget.CheckResult, quotaCheck auth.APIKeyQuotaCheckResult, contentDecision contentPolicyDecision, startedAt time.Time) (bool, error) {
+	estimatedCost, err := estimateReservationCost(request, models)
+	if err != nil {
+		return false, err
+	}
+	if estimatedCost <= 0 {
+		return false, nil
+	}
+	result, err := s.costReservations.Reserve(ctx, limits.ReserveInput{
+		RequestID:             input.RequestID,
+		OrgID:                 input.Principal.OrgID,
+		APIKeyID:              input.Principal.APIKeyID,
+		EstimatedCostMicroUSD: estimatedCost,
+	})
+	if err != nil {
+		return false, err
+	}
+	if result.Allowed {
+		return true, nil
+	}
+	if result.BlockedScope == limits.ScopeTypeAPIKey {
+		metadata := withContentPolicyMetadata(apiKeyQuotaMetadata(quotaCheck), contentDecision)
+		_ = s.recordFailure(ctx, input, request.Model, metering.StatusBudgetBlocked, http.StatusPaymentRequired, domain.CodeAPIKeyQuotaExceeded, "", nil, nil, metadata, startedAt)
+		s.metrics.ObserveGatewayRequest("api_key_quota_blocked", "", request.Model, s.clock().Sub(startedAt))
+		return false, domain.NewError(http.StatusPaymentRequired, domain.CodeAPIKeyQuotaExceeded, "api key quota exceeded")
+	}
+	metadata := withContentPolicyMetadata(budgetMetadata(budgetCheck), contentDecision)
+	_ = s.recordFailure(ctx, input, request.Model, metering.StatusBudgetBlocked, http.StatusPaymentRequired, domain.CodeBudgetExceeded, "", nil, nil, metadata, startedAt)
+	s.metrics.IncBudgetBlocked()
+	s.metrics.ObserveGatewayRequest("budget_blocked", "", request.Model, s.clock().Sub(startedAt))
+	return false, domain.NewError(http.StatusPaymentRequired, domain.CodeBudgetExceeded, "budget exceeded")
+}
+
+func estimateReservationCost(request ChatCompletionRequest, models []db.Model) (int64, error) {
+	promptTokens := estimatePromptTokens(request.Messages)
+	calculator := costing.NewCalculator()
+	var maxCost int64
+	for _, model := range models {
+		completionTokens := estimateReservationCompletionTokens(request.MaxTokens, promptTokens, model)
+		calculation, err := calculator.Calculate(costing.CalculateInput{
+			PromptTokens:                   promptTokens,
+			CompletionTokens:               completionTokens,
+			InputPriceMicroUSDPer1KTokens:  model.InputPriceMicroUsdPer1kTokens,
+			OutputPriceMicroUSDPer1KTokens: model.OutputPriceMicroUsdPer1kTokens,
+		})
+		if err != nil {
+			return 0, err
+		}
+		if calculation.TotalCostMicro > maxCost {
+			maxCost = calculation.TotalCostMicro
+		}
+	}
+	return maxCost, nil
+}
+
+func estimateReservationCompletionTokens(maxTokens *int, promptTokens int64, model db.Model) int64 {
+	if maxTokens != nil && *maxTokens > 0 {
+		return int64(*maxTokens)
+	}
+	if !model.ContextWindow.Valid {
+		return defaultReservationCompletionTokens
+	}
+	remaining := int64(model.ContextWindow.Int32) - promptTokens
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+func modelsFromResolvedTargets(targets []routing.ResolvedTarget) []db.Model {
+	models := make([]db.Model, 0, len(targets))
+	for _, target := range targets {
+		models = append(models, target.Model)
+	}
+	return models
 }
 
 func estimatePromptTokens(messages []contract.ChatMessage) int64 {

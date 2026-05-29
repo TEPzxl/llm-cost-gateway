@@ -17,6 +17,7 @@ sql:
       - db/migrations/000013_rbac.up.sql
       - db/migrations/000014_cost_anomaly_policies.up.sql
       - db/migrations/000015_magic_link_tokens.up.sql
+      - db/migrations/000016_cost_reservations.up.sql
     queries: db/query
     gen:
       go:

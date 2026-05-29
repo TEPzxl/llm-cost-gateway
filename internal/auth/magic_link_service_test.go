@@ -150,6 +150,41 @@ func TestMagicLinkServiceRejectsExpiredAndDisabledMemberTokens(t *testing.T) {
 	}
 }
 
+func TestMagicLinkServiceRateLimitsRepeatedRequestsForSameEmail(t *testing.T) {
+	ctx := context.Background()
+	st := openAuthTestStore(t, ctx)
+	resetAuthTestDatabase(t, ctx, st)
+	org := createAuthTestOrganization(t, ctx, st, "magic-link-rate-limit")
+
+	sessionService := NewSessionService(st.Queries, "session-hash-secret")
+	if _, err := sessionService.UpsertMember(ctx, UpsertMemberParams{
+		OrgID:       org.ID,
+		Email:       "owner@example.com",
+		DisplayName: "Owner",
+		Role:        RoleOwner,
+	}); err != nil {
+		t.Fatalf("UpsertMember returned error: %v", err)
+	}
+
+	sender := email.NewFakeSender()
+	service := NewMagicLinkService(st, "session-hash-secret", sender, MagicLinkConfig{
+		BaseURL: "https://console.example.com/login",
+		TTL:     time.Minute,
+	})
+	wantLimit := 3
+	for i := 0; i < wantLimit+2; i++ {
+		if err := service.Request(ctx, MagicLinkRequestParams{
+			OrgSlug: org.Slug,
+			Email:   " owner@example.com ",
+		}); err != nil {
+			t.Fatalf("Request #%d returned error: %v", i+1, err)
+		}
+	}
+	if got := len(sender.Messages()); got != wantLimit {
+		t.Fatalf("sent messages = %d, want %d", got, wantLimit)
+	}
+}
+
 func TestMagicLinkServiceDoesNotEnumerateUnknownEmail(t *testing.T) {
 	ctx := context.Background()
 	st := openAuthTestStore(t, ctx)

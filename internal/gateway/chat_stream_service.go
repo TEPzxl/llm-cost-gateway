@@ -14,6 +14,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/metering"
 	contract "github.com/tep/llm-cost-gateway/internal/provider/contract"
 	"github.com/tep/llm-cost-gateway/internal/routing"
+	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -21,6 +22,7 @@ import (
 type ChatStreamResult struct {
 	Stream contract.ChatStream
 
+	reservationActive bool
 	input             ChatInput
 	request           ChatCompletionRequest
 	resolved          routing.ResolveResult
@@ -142,6 +144,19 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 		return nil, err
 	}
 
+	reservationActive, err := s.reserveProviderCost(ctx, input, request, []db.Model{resolved.Model}, budgetCheck, quotaCheck, contentDecision, startedAt)
+	if err != nil {
+		return nil, err
+	}
+	reservationTransferred := false
+	if reservationActive {
+		defer func() {
+			if !reservationTransferred {
+				_ = s.costReservations.Release(context.Background(), input.RequestID)
+			}
+		}()
+	}
+
 	attemptCtx, attemptSpan := s.tracer.Start(ctx, "gateway.provider_attempt", trace.WithAttributes(
 		attribute.String("provider", resolved.Provider.Name),
 		attribute.String("provider_id", resolved.Provider.ID.String()),
@@ -188,8 +203,9 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 	endTracingSpan(attemptSpan, "success", "", nil)
 
 	spanStatus = "success"
-	return &ChatStreamResult{
+	result := &ChatStreamResult{
 		Stream:            stream,
+		reservationActive: reservationActive,
 		input:             input,
 		request:           request,
 		resolved:          resolved,
@@ -199,7 +215,9 @@ func (s *ChatService) StreamChat(ctx context.Context, input ChatInput) (*ChatStr
 		contentDecision:   contentDecision,
 		startedAt:         startedAt,
 		providerStartedAt: providerStartedAt,
-	}, nil
+	}
+	reservationTransferred = true
+	return result, nil
 }
 
 func (s *ChatService) FinalizeStream(ctx context.Context, result *ChatStreamResult, usage *contract.StreamUsage, streamErr error) error {
@@ -209,6 +227,9 @@ func (s *ChatService) FinalizeStream(ctx context.Context, result *ChatStreamResu
 	if streamErr != nil {
 		status, code := providerErrorStatus(streamErr)
 		err := s.recordFailure(ctx, result.input, result.request.Model, metering.StatusError, status, code, "", &result.resolved.Provider.ID, &result.resolved.Model.ID, metadata, result.startedAt)
+		if result.reservationActive {
+			_ = s.costReservations.Release(context.Background(), result.input.RequestID)
+		}
 		s.metrics.ObserveProviderRequest(result.resolved.Provider.Name, result.request.Model, "error", code)
 		s.metrics.ObserveGatewayRequest("error", result.resolved.Provider.Name, result.request.Model, s.clock().Sub(result.startedAt))
 		return err
@@ -234,6 +255,9 @@ func (s *ChatService) FinalizeStream(ctx context.Context, result *ChatStreamResu
 			StartedAt:         result.startedAt,
 			CompletedAt:       completedAt,
 		})
+		if result.reservationActive {
+			_ = s.costReservations.Release(context.Background(), result.input.RequestID)
+		}
 		s.metrics.ObserveGatewayRequest("error", result.resolved.Provider.Name, result.request.Model, completedAt.Sub(result.startedAt))
 		return err
 	}
@@ -268,6 +292,9 @@ func (s *ChatService) FinalizeStream(ctx context.Context, result *ChatStreamResu
 		CompletedAt:                    completedAt,
 	})
 	if err != nil {
+		if result.reservationActive {
+			_ = s.costReservations.Release(context.Background(), result.input.RequestID)
+		}
 		return err
 	}
 	statusLabel := "success"

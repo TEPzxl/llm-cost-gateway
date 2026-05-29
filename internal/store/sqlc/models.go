@@ -143,6 +143,20 @@ type CostAnomalyPolicy struct {
 	UpdatedAt             time.Time   `db:"updated_at" json:"updated_at"`
 }
 
+type CostLimitCounter struct {
+	ID               uuid.UUID `db:"id" json:"id"`
+	OrgID            uuid.UUID `db:"org_id" json:"org_id"`
+	ScopeType        string    `db:"scope_type" json:"scope_type"`
+	ScopeID          uuid.UUID `db:"scope_id" json:"scope_id"`
+	Period           string    `db:"period" json:"period"`
+	WindowStart      time.Time `db:"window_start" json:"window_start"`
+	WindowEnd        time.Time `db:"window_end" json:"window_end"`
+	SettledMicroUsd  int64     `db:"settled_micro_usd" json:"settled_micro_usd"`
+	ReservedMicroUsd int64     `db:"reserved_micro_usd" json:"reserved_micro_usd"`
+	CreatedAt        time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt        time.Time `db:"updated_at" json:"updated_at"`
+}
+
 type CostRecord struct {
 	ID               uuid.UUID       `db:"id" json:"id"`
 	UsageRecordID    uuid.UUID       `db:"usage_record_id" json:"usage_record_id"`
@@ -156,6 +170,23 @@ type CostRecord struct {
 	PricingSnapshot  json.RawMessage `db:"pricing_snapshot" json:"pricing_snapshot"`
 	CreatedAt        time.Time       `db:"created_at" json:"created_at"`
 	PricingVersionID *uuid.UUID      `db:"pricing_version_id" json:"pricing_version_id"`
+}
+
+type CostReservation struct {
+	ID               uuid.UUID `db:"id" json:"id"`
+	RequestID        uuid.UUID `db:"request_id" json:"request_id"`
+	OrgID            uuid.UUID `db:"org_id" json:"org_id"`
+	ApiKeyID         uuid.UUID `db:"api_key_id" json:"api_key_id"`
+	ScopeType        string    `db:"scope_type" json:"scope_type"`
+	ScopeID          uuid.UUID `db:"scope_id" json:"scope_id"`
+	Period           string    `db:"period" json:"period"`
+	WindowStart      time.Time `db:"window_start" json:"window_start"`
+	WindowEnd        time.Time `db:"window_end" json:"window_end"`
+	ReservedMicroUsd int64     `db:"reserved_micro_usd" json:"reserved_micro_usd"`
+	SettledMicroUsd  int64     `db:"settled_micro_usd" json:"settled_micro_usd"`
+	Status           string    `db:"status" json:"status"`
+	CreatedAt        time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt        time.Time `db:"updated_at" json:"updated_at"`
 }
 
 type MagicLinkToken struct {

@@ -145,7 +145,7 @@ func (q *Queries) InsertUsageRecord(ctx context.Context, arg InsertUsageRecordPa
 
 const usageSummaryByAPIKey = `-- name: UsageSummaryByAPIKey :many
 SELECT
-  ur.api_key_id,
+  rl.api_key_id,
   count(*)::bigint AS request_count,
   count(*) FILTER (WHERE rl.status IN ('success', 'budget_warned'))::bigint AS success_count,
   count(*) FILTER (WHERE rl.status NOT IN ('success', 'budget_warned'))::bigint AS error_count,
@@ -154,40 +154,41 @@ SELECT
   COALESCE(sum(ur.total_tokens), 0)::bigint AS total_tokens,
   COALESCE(sum(cr.total_cost_micro), 0)::bigint AS total_cost_micro_usd,
   COALESCE(avg(rl.latency_ms), 0)::double precision AS avg_latency_ms
-FROM usage_records ur
-JOIN request_logs rl
-  ON rl.org_id = ur.org_id
- AND rl.id = ur.request_log_id
+FROM request_logs rl
+LEFT JOIN usage_records ur
+  ON ur.org_id = rl.org_id
+ AND ur.request_log_id = rl.id
 LEFT JOIN cost_records cr
   ON cr.org_id = ur.org_id
  AND cr.usage_record_id = ur.id
-WHERE ur.org_id = $1
-  AND ur.created_at >= $2
-  AND ur.created_at < $3
-GROUP BY ur.api_key_id
+WHERE rl.org_id = $1
+  AND rl.api_key_id IS NOT NULL
+  AND rl.started_at >= $2
+  AND rl.started_at < $3
+GROUP BY rl.api_key_id
 ORDER BY total_cost_micro_usd DESC, request_count DESC
 `
 
 type UsageSummaryByAPIKeyParams struct {
 	OrgID       uuid.UUID `db:"org_id" json:"org_id"`
-	CreatedAt   time.Time `db:"created_at" json:"created_at"`
-	CreatedAt_2 time.Time `db:"created_at_2" json:"created_at_2"`
+	StartedAt   time.Time `db:"started_at" json:"started_at"`
+	StartedAt_2 time.Time `db:"started_at_2" json:"started_at_2"`
 }
 
 type UsageSummaryByAPIKeyRow struct {
-	ApiKeyID          uuid.UUID `db:"api_key_id" json:"api_key_id"`
-	RequestCount      int64     `db:"request_count" json:"request_count"`
-	SuccessCount      int64     `db:"success_count" json:"success_count"`
-	ErrorCount        int64     `db:"error_count" json:"error_count"`
-	PromptTokens      int64     `db:"prompt_tokens" json:"prompt_tokens"`
-	CompletionTokens  int64     `db:"completion_tokens" json:"completion_tokens"`
-	TotalTokens       int64     `db:"total_tokens" json:"total_tokens"`
-	TotalCostMicroUsd int64     `db:"total_cost_micro_usd" json:"total_cost_micro_usd"`
-	AvgLatencyMs      float64   `db:"avg_latency_ms" json:"avg_latency_ms"`
+	ApiKeyID          *uuid.UUID `db:"api_key_id" json:"api_key_id"`
+	RequestCount      int64      `db:"request_count" json:"request_count"`
+	SuccessCount      int64      `db:"success_count" json:"success_count"`
+	ErrorCount        int64      `db:"error_count" json:"error_count"`
+	PromptTokens      int64      `db:"prompt_tokens" json:"prompt_tokens"`
+	CompletionTokens  int64      `db:"completion_tokens" json:"completion_tokens"`
+	TotalTokens       int64      `db:"total_tokens" json:"total_tokens"`
+	TotalCostMicroUsd int64      `db:"total_cost_micro_usd" json:"total_cost_micro_usd"`
+	AvgLatencyMs      float64    `db:"avg_latency_ms" json:"avg_latency_ms"`
 }
 
 func (q *Queries) UsageSummaryByAPIKey(ctx context.Context, arg UsageSummaryByAPIKeyParams) ([]UsageSummaryByAPIKeyRow, error) {
-	rows, err := q.db.Query(ctx, usageSummaryByAPIKey, arg.OrgID, arg.CreatedAt, arg.CreatedAt_2)
+	rows, err := q.db.Query(ctx, usageSummaryByAPIKey, arg.OrgID, arg.StartedAt, arg.StartedAt_2)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +219,7 @@ func (q *Queries) UsageSummaryByAPIKey(ctx context.Context, arg UsageSummaryByAP
 
 const usageSummaryByModel = `-- name: UsageSummaryByModel :many
 SELECT
-  ur.model_id,
+  rl.model_id,
   count(*)::bigint AS request_count,
   count(*) FILTER (WHERE rl.status IN ('success', 'budget_warned'))::bigint AS success_count,
   count(*) FILTER (WHERE rl.status NOT IN ('success', 'budget_warned'))::bigint AS error_count,
@@ -227,40 +228,41 @@ SELECT
   COALESCE(sum(ur.total_tokens), 0)::bigint AS total_tokens,
   COALESCE(sum(cr.total_cost_micro), 0)::bigint AS total_cost_micro_usd,
   COALESCE(avg(rl.latency_ms), 0)::double precision AS avg_latency_ms
-FROM usage_records ur
-JOIN request_logs rl
-  ON rl.org_id = ur.org_id
- AND rl.id = ur.request_log_id
+FROM request_logs rl
+LEFT JOIN usage_records ur
+  ON ur.org_id = rl.org_id
+ AND ur.request_log_id = rl.id
 LEFT JOIN cost_records cr
   ON cr.org_id = ur.org_id
  AND cr.usage_record_id = ur.id
-WHERE ur.org_id = $1
-  AND ur.created_at >= $2
-  AND ur.created_at < $3
-GROUP BY ur.model_id
+WHERE rl.org_id = $1
+  AND rl.model_id IS NOT NULL
+  AND rl.started_at >= $2
+  AND rl.started_at < $3
+GROUP BY rl.model_id
 ORDER BY total_cost_micro_usd DESC, request_count DESC
 `
 
 type UsageSummaryByModelParams struct {
 	OrgID       uuid.UUID `db:"org_id" json:"org_id"`
-	CreatedAt   time.Time `db:"created_at" json:"created_at"`
-	CreatedAt_2 time.Time `db:"created_at_2" json:"created_at_2"`
+	StartedAt   time.Time `db:"started_at" json:"started_at"`
+	StartedAt_2 time.Time `db:"started_at_2" json:"started_at_2"`
 }
 
 type UsageSummaryByModelRow struct {
-	ModelID           uuid.UUID `db:"model_id" json:"model_id"`
-	RequestCount      int64     `db:"request_count" json:"request_count"`
-	SuccessCount      int64     `db:"success_count" json:"success_count"`
-	ErrorCount        int64     `db:"error_count" json:"error_count"`
-	PromptTokens      int64     `db:"prompt_tokens" json:"prompt_tokens"`
-	CompletionTokens  int64     `db:"completion_tokens" json:"completion_tokens"`
-	TotalTokens       int64     `db:"total_tokens" json:"total_tokens"`
-	TotalCostMicroUsd int64     `db:"total_cost_micro_usd" json:"total_cost_micro_usd"`
-	AvgLatencyMs      float64   `db:"avg_latency_ms" json:"avg_latency_ms"`
+	ModelID           *uuid.UUID `db:"model_id" json:"model_id"`
+	RequestCount      int64      `db:"request_count" json:"request_count"`
+	SuccessCount      int64      `db:"success_count" json:"success_count"`
+	ErrorCount        int64      `db:"error_count" json:"error_count"`
+	PromptTokens      int64      `db:"prompt_tokens" json:"prompt_tokens"`
+	CompletionTokens  int64      `db:"completion_tokens" json:"completion_tokens"`
+	TotalTokens       int64      `db:"total_tokens" json:"total_tokens"`
+	TotalCostMicroUsd int64      `db:"total_cost_micro_usd" json:"total_cost_micro_usd"`
+	AvgLatencyMs      float64    `db:"avg_latency_ms" json:"avg_latency_ms"`
 }
 
 func (q *Queries) UsageSummaryByModel(ctx context.Context, arg UsageSummaryByModelParams) ([]UsageSummaryByModelRow, error) {
-	rows, err := q.db.Query(ctx, usageSummaryByModel, arg.OrgID, arg.CreatedAt, arg.CreatedAt_2)
+	rows, err := q.db.Query(ctx, usageSummaryByModel, arg.OrgID, arg.StartedAt, arg.StartedAt_2)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +293,7 @@ func (q *Queries) UsageSummaryByModel(ctx context.Context, arg UsageSummaryByMod
 
 const usageSummaryByProvider = `-- name: UsageSummaryByProvider :many
 SELECT
-  ur.provider_id,
+  rl.provider_id,
   count(*)::bigint AS request_count,
   count(*) FILTER (WHERE rl.status IN ('success', 'budget_warned'))::bigint AS success_count,
   count(*) FILTER (WHERE rl.status NOT IN ('success', 'budget_warned'))::bigint AS error_count,
@@ -300,40 +302,41 @@ SELECT
   COALESCE(sum(ur.total_tokens), 0)::bigint AS total_tokens,
   COALESCE(sum(cr.total_cost_micro), 0)::bigint AS total_cost_micro_usd,
   COALESCE(avg(rl.latency_ms), 0)::double precision AS avg_latency_ms
-FROM usage_records ur
-JOIN request_logs rl
-  ON rl.org_id = ur.org_id
- AND rl.id = ur.request_log_id
+FROM request_logs rl
+LEFT JOIN usage_records ur
+  ON ur.org_id = rl.org_id
+ AND ur.request_log_id = rl.id
 LEFT JOIN cost_records cr
   ON cr.org_id = ur.org_id
  AND cr.usage_record_id = ur.id
-WHERE ur.org_id = $1
-  AND ur.created_at >= $2
-  AND ur.created_at < $3
-GROUP BY ur.provider_id
+WHERE rl.org_id = $1
+  AND rl.provider_id IS NOT NULL
+  AND rl.started_at >= $2
+  AND rl.started_at < $3
+GROUP BY rl.provider_id
 ORDER BY total_cost_micro_usd DESC, request_count DESC
 `
 
 type UsageSummaryByProviderParams struct {
 	OrgID       uuid.UUID `db:"org_id" json:"org_id"`
-	CreatedAt   time.Time `db:"created_at" json:"created_at"`
-	CreatedAt_2 time.Time `db:"created_at_2" json:"created_at_2"`
+	StartedAt   time.Time `db:"started_at" json:"started_at"`
+	StartedAt_2 time.Time `db:"started_at_2" json:"started_at_2"`
 }
 
 type UsageSummaryByProviderRow struct {
-	ProviderID        uuid.UUID `db:"provider_id" json:"provider_id"`
-	RequestCount      int64     `db:"request_count" json:"request_count"`
-	SuccessCount      int64     `db:"success_count" json:"success_count"`
-	ErrorCount        int64     `db:"error_count" json:"error_count"`
-	PromptTokens      int64     `db:"prompt_tokens" json:"prompt_tokens"`
-	CompletionTokens  int64     `db:"completion_tokens" json:"completion_tokens"`
-	TotalTokens       int64     `db:"total_tokens" json:"total_tokens"`
-	TotalCostMicroUsd int64     `db:"total_cost_micro_usd" json:"total_cost_micro_usd"`
-	AvgLatencyMs      float64   `db:"avg_latency_ms" json:"avg_latency_ms"`
+	ProviderID        *uuid.UUID `db:"provider_id" json:"provider_id"`
+	RequestCount      int64      `db:"request_count" json:"request_count"`
+	SuccessCount      int64      `db:"success_count" json:"success_count"`
+	ErrorCount        int64      `db:"error_count" json:"error_count"`
+	PromptTokens      int64      `db:"prompt_tokens" json:"prompt_tokens"`
+	CompletionTokens  int64      `db:"completion_tokens" json:"completion_tokens"`
+	TotalTokens       int64      `db:"total_tokens" json:"total_tokens"`
+	TotalCostMicroUsd int64      `db:"total_cost_micro_usd" json:"total_cost_micro_usd"`
+	AvgLatencyMs      float64    `db:"avg_latency_ms" json:"avg_latency_ms"`
 }
 
 func (q *Queries) UsageSummaryByProvider(ctx context.Context, arg UsageSummaryByProviderParams) ([]UsageSummaryByProviderRow, error) {
-	rows, err := q.db.Query(ctx, usageSummaryByProvider, arg.OrgID, arg.CreatedAt, arg.CreatedAt_2)
+	rows, err := q.db.Query(ctx, usageSummaryByProvider, arg.OrgID, arg.StartedAt, arg.StartedAt_2)
 	if err != nil {
 		return nil, err
 	}

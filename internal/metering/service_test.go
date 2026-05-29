@@ -15,6 +15,7 @@ import (
 	"github.com/tep/llm-cost-gateway/internal/costing"
 	"github.com/tep/llm-cost-gateway/internal/domain"
 	"github.com/tep/llm-cost-gateway/internal/events"
+	"github.com/tep/llm-cost-gateway/internal/limits"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 	"github.com/tep/llm-cost-gateway/internal/testutil"
@@ -85,6 +86,59 @@ func TestServiceRecordSuccessWritesRequestUsageAndCost(t *testing.T) {
 	assertTableCount(t, ctx, st, "request_logs", 1)
 	assertTableCount(t, ctx, st, "usage_records", 1)
 	assertTableCount(t, ctx, st, "cost_records", 1)
+}
+
+func TestServiceRecordSuccessSettlesCostReservation(t *testing.T) {
+	ctx := context.Background()
+	st := openMeteringTestStore(t, ctx)
+	resetMeteringTestDatabase(t, ctx, st)
+	fixture := createMeteringFixture(t, ctx, st)
+	createMeteringBudget(t, ctx, st, fixture.OrgID, 1000)
+	requestID := uuid.New()
+	reservationService := limits.NewReservationService(st)
+	reserved, err := reservationService.Reserve(ctx, limits.ReserveInput{
+		RequestID:             requestID,
+		OrgID:                 fixture.OrgID,
+		APIKeyID:              fixture.APIKeyID,
+		EstimatedCostMicroUSD: 600,
+	})
+	if err != nil {
+		t.Fatalf("Reserve returned error: %v", err)
+	}
+	if !reserved.Allowed {
+		t.Fatalf("Reserve allowed = false, want true")
+	}
+
+	service := NewService(st, costing.NewCalculator())
+	result, err := service.RecordSuccess(ctx, RecordSuccessInput{
+		RequestID:                      requestID,
+		OrgID:                          fixture.OrgID,
+		APIKeyID:                       fixture.APIKeyID,
+		ProviderID:                     fixture.ProviderID,
+		ModelID:                        fixture.ModelID,
+		RoutePolicyID:                  &fixture.RoutePolicyID,
+		Method:                         "POST",
+		Path:                           "/v1/chat/completions",
+		RequestModel:                   "fast-chat",
+		StatusCode:                     200,
+		RequestHash:                    "sha256:request-hash",
+		ResponseHash:                   "sha256:response-hash",
+		LatencyMS:                      321,
+		PromptTokens:                   20,
+		CompletionTokens:               30,
+		InputPriceMicroUSDPer1KTokens:  100,
+		OutputPriceMicroUSDPer1KTokens: 200,
+		StartedAt:                      time.Now().UTC().Add(-time.Second),
+		CompletedAt:                    time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("RecordSuccess returned error: %v", err)
+	}
+
+	reservedMicro, settledMicro := readMeteringCostCounter(t, ctx, st, limits.ScopeTypeOrg, fixture.OrgID)
+	if reservedMicro != 0 || settledMicro != result.CostRecord.TotalCostMicro {
+		t.Fatalf("counter reserved=%d settled=%d, want reserved=0 settled=%d", reservedMicro, settledMicro, result.CostRecord.TotalCostMicro)
+	}
 }
 
 func TestServiceRecordSuccessPublishesUsageEvent(t *testing.T) {
@@ -576,6 +630,8 @@ func resetMeteringTestDatabase(t *testing.T, ctx context.Context, st *store.Stor
 
 	_, err := st.Pool.Exec(ctx, `
 		TRUNCATE
+			cost_reservations,
+			cost_limit_counters,
 			cost_records,
 			usage_records,
 			request_logs,
@@ -691,6 +747,38 @@ func createMeteringFixture(t *testing.T, ctx context.Context, st *store.Store) m
 		RoutePolicyID:    policy.ID,
 		PricingVersionID: pricingVersion.ID,
 	}
+}
+
+func createMeteringBudget(t *testing.T, ctx context.Context, st *store.Store, orgID uuid.UUID, limit int64) {
+	t.Helper()
+	now := time.Now().UTC()
+	_, err := st.Queries.CreateBudget(ctx, db.CreateBudgetParams{
+		ID:            uuid.New(),
+		OrgID:         orgID,
+		Name:          "metering-budget",
+		ScopeType:     limits.ScopeTypeOrg,
+		Period:        limits.PeriodDaily,
+		LimitMicroUsd: limit,
+		Action:        limits.ActionBlock,
+		Status:        limits.StatusActive,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("CreateBudget returned error: %v", err)
+	}
+}
+
+func readMeteringCostCounter(t *testing.T, ctx context.Context, st *store.Store, scopeType string, scopeID uuid.UUID) (reserved int64, settled int64) {
+	t.Helper()
+	if err := st.Pool.QueryRow(ctx, `
+		SELECT reserved_micro_usd, settled_micro_usd
+		FROM cost_limit_counters
+		WHERE scope_type = $1 AND scope_id = $2
+	`, scopeType, scopeID).Scan(&reserved, &settled); err != nil {
+		t.Fatalf("read cost counter: %v", err)
+	}
+	return reserved, settled
 }
 
 func assertTableCount(t *testing.T, ctx context.Context, st *store.Store, table string, want int) {
