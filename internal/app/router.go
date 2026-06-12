@@ -150,12 +150,16 @@ func registerAdminRoutes(router *gin.Engine, cfg RouterConfig) {
 	}
 	apiKeyService := auth.NewAPIKeyService(cfg.Store.Queries, cfg.TokenHashSecret, auth.WithAPIKeyHashKeyRing(cfg.TokenHashKeyRing))
 	publicOutboundOnly := cfg.OutboundPublicOnly
-	providerService := provider.NewService(cfg.Store, cfg.SecretEncryptionKey, provider.WithPublicOutboundOnly(publicOutboundOnly), provider.WithSecretKeyRing(cfg.SecretKeyRing))
-	providerHealthService := provider.NewHealthService(cfg.Store, cfg.SecretEncryptionKey, provider.WithHealthPublicOutboundOnly(publicOutboundOnly), provider.WithHealthSecretKeyRing(cfg.SecretKeyRing))
+	secretKeyRing := cfg.SecretKeyRing
+	if secretKeyRing == nil {
+		secretKeyRing, _ = secretcrypto.NewSingleKeyRing(cfg.SecretEncryptionKey)
+	}
+	providerService := provider.NewService(cfg.Store, cfg.SecretEncryptionKey, provider.WithPublicOutboundOnly(publicOutboundOnly), provider.WithSecretKeyRing(secretKeyRing))
+	providerHealthService := provider.NewHealthService(cfg.Store, cfg.SecretEncryptionKey, provider.WithHealthPublicOutboundOnly(publicOutboundOnly), provider.WithHealthSecretKeyRing(secretKeyRing))
 	pricingService := costing.NewPricingService(cfg.Store)
 	routePolicyService := routing.NewService(cfg.Store)
 	budgetService := budget.NewService(cfg.Store.Queries)
-	budgetAlertService := budget.NewAlertService(cfg.Store, budget.WithAlertPublicOutboundOnly(publicOutboundOnly))
+	budgetAlertService := budget.NewAlertService(cfg.Store, budget.WithAlertPublicOutboundOnly(publicOutboundOnly), budget.WithAlertSecretKeyRing(secretKeyRing))
 	anomalyService := anomaly.NewService(cfg.Store)
 	auditService := audit.NewAdminAuditService(cfg.Store.Queries)
 	contentPolicyService := policy.NewService(cfg.Store)

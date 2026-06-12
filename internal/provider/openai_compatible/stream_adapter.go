@@ -204,5 +204,6 @@ func parseStreamUsage(data string) *contract.StreamUsage {
 func newStreamingUpstreamRequest(req contract.ChatRequest) upstreamRequest {
 	upstream := newUpstreamRequest(req)
 	upstream.Stream = true
+	upstream.StreamOptions = &streamOptions{IncludeUsage: true}
 	return upstream
 }

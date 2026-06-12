@@ -17,19 +17,24 @@ func TestStreamChatSendsSSERequestAndParsesEvents(t *testing.T) {
 	var capturedAccept string
 	var capturedModel string
 	var capturedStream bool
+	var capturedIncludeUsage bool
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedAuth = r.Header.Get("Authorization")
 		capturedAccept = r.Header.Get("Accept")
 		var request struct {
-			Model  string `json:"model"`
-			Stream bool   `json:"stream"`
+			Model         string `json:"model"`
+			Stream        bool   `json:"stream"`
+			StreamOptions struct {
+				IncludeUsage bool `json:"include_usage"`
+			} `json:"stream_options"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatalf("decode upstream request: %v", err)
 		}
 		capturedModel = request.Model
 		capturedStream = request.Stream
+		capturedIncludeUsage = request.StreamOptions.IncludeUsage
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		writeSSE(t, w, `{"id":"chatcmpl_123","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"}}]}`)
@@ -57,6 +62,9 @@ func TestStreamChatSendsSSERequestAndParsesEvents(t *testing.T) {
 	}
 	if capturedModel != "gpt-test" || !capturedStream {
 		t.Fatalf("upstream model=%q stream=%v, want gpt-test stream=true", capturedModel, capturedStream)
+	}
+	if !capturedIncludeUsage {
+		t.Fatal("stream_options.include_usage = false, want true")
 	}
 	if len(events) != 3 {
 		t.Fatalf("events len = %d, want 3; events=%+v", len(events), events)

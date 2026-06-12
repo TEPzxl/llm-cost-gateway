@@ -9,19 +9,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	secretcrypto "github.com/tep/llm-cost-gateway/internal/crypto"
 	"github.com/tep/llm-cost-gateway/internal/netutil"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 )
 
 const (
-	AlertDeliverySuccess = "success"
-	AlertDeliveryFailed  = "failed"
+	AlertDeliverySuccess         = "success"
+	AlertDeliveryFailed          = "failed"
+	encryptedWebhookSecretPrefix = "llmgw_secret:v1:"
 )
 
 var alertThresholds = []int32{80, 90, 100}
@@ -32,6 +35,7 @@ type AlertService struct {
 	client             *http.Client
 	clock              func() time.Time
 	publicOutboundOnly bool
+	secretKeyRing      *secretcrypto.SecretKeyRing
 }
 
 type AlertOption func(*AlertService)
@@ -58,6 +62,14 @@ func WithAlertClock(clock func() time.Time) AlertOption {
 		if clock != nil {
 			s.clock = clock
 			s.budget.clock = clock
+		}
+	}
+}
+
+func WithAlertSecretKeyRing(keyRing *secretcrypto.SecretKeyRing) AlertOption {
+	return func(s *AlertService) {
+		if keyRing != nil {
+			s.secretKeyRing = keyRing
 		}
 	}
 }
@@ -116,13 +128,17 @@ func (s *AlertService) CreateAlert(ctx context.Context, params CreateAlertParams
 	if status != StatusActive && status != StatusDisabled {
 		return db.BudgetAlert{}, fmt.Errorf("status must be active or disabled")
 	}
+	webhookSecret, err := SealWebhookSecret(s.secretKeyRing, params.WebhookSecret)
+	if err != nil {
+		return db.BudgetAlert{}, err
+	}
 	now := s.clock()
 	return s.store.Queries.CreateBudgetAlert(ctx, db.CreateBudgetAlertParams{
 		ID:            uuid.New(),
 		OrgID:         params.OrgID,
 		BudgetID:      params.BudgetID,
 		WebhookUrl:    webhookURL,
-		WebhookSecret: nullableText(params.WebhookSecret),
+		WebhookSecret: webhookSecret,
 		Status:        status,
 		CreatedAt:     now,
 		UpdatedAt:     now,
@@ -220,10 +236,17 @@ func (s *AlertService) deliver(ctx context.Context, alert db.BudgetAlert, status
 	} else {
 		req.Header.Set("Content-Type", "application/json")
 		if alert.WebhookSecret.Valid {
-			req.Header.Set("X-LLMGW-Signature", signWebhook(alert.WebhookSecret.String, body))
+			secret, err := OpenWebhookSecret(s.secretKeyRing, alert.WebhookSecret)
+			if err != nil {
+				deliveryStatus = AlertDeliveryFailed
+				errorMessage = "webhook secret decrypt failed"
+			} else {
+				req.Header.Set("X-LLMGW-Signature", signWebhook(secret, body))
+			}
 		}
-		resp, err := s.client.Do(req)
-		if err != nil {
+		if deliveryStatus == AlertDeliveryFailed {
+			// Skip sending when the local secret cannot be decrypted.
+		} else if resp, err := s.client.Do(req); err != nil {
 			deliveryStatus = AlertDeliveryFailed
 			errorMessage = "webhook request failed"
 		} else {
@@ -266,6 +289,73 @@ func validateWebhookURL(value string, publicOutboundOnly bool) error {
 		return fmt.Errorf("webhook_url is required")
 	}
 	return netutil.ValidateOutboundHTTPURL(value, "webhook_url", publicOutboundOnly)
+}
+
+func SealWebhookSecret(keyRing *secretcrypto.SecretKeyRing, value string) (pgtype.Text, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return pgtype.Text{}, nil
+	}
+	if keyRing == nil {
+		return pgtype.Text{String: value, Valid: true}, nil
+	}
+	sealed, err := keyRing.Seal(value)
+	if err != nil {
+		return pgtype.Text{}, err
+	}
+	return pgtype.Text{
+		String: fmt.Sprintf("%s%d:%s:%s", encryptedWebhookSecretPrefix, sealed.KeyVersion, sealed.Nonce, sealed.Encrypted),
+		Valid:  true,
+	}, nil
+}
+
+func OpenWebhookSecret(keyRing *secretcrypto.SecretKeyRing, stored pgtype.Text) (string, error) {
+	if !stored.Valid {
+		return "", nil
+	}
+	value := strings.TrimSpace(stored.String)
+	if value == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(value, encryptedWebhookSecretPrefix) {
+		return value, nil
+	}
+	if keyRing == nil {
+		return "", fmt.Errorf("webhook secret keyring is invalid")
+	}
+
+	version, nonce, encrypted, err := parseWebhookSecretEnvelope(value)
+	if err != nil {
+		return "", err
+	}
+	return keyRing.Open(encrypted, nonce, version)
+}
+
+func WebhookSecretKeyVersion(stored pgtype.Text) (int32, bool, error) {
+	if !stored.Valid {
+		return 0, false, nil
+	}
+	value := strings.TrimSpace(stored.String)
+	if value == "" || !strings.HasPrefix(value, encryptedWebhookSecretPrefix) {
+		return 0, false, nil
+	}
+	version, _, _, err := parseWebhookSecretEnvelope(value)
+	if err != nil {
+		return 0, true, err
+	}
+	return version, true, nil
+}
+
+func parseWebhookSecretEnvelope(value string) (int32, string, string, error) {
+	parts := strings.SplitN(strings.TrimPrefix(value, encryptedWebhookSecretPrefix), ":", 3)
+	if len(parts) != 3 {
+		return 0, "", "", fmt.Errorf("webhook secret envelope is invalid")
+	}
+	version, err := strconv.ParseInt(parts[0], 10, 32)
+	if err != nil || version <= 0 {
+		return 0, "", "", fmt.Errorf("webhook secret key version is invalid")
+	}
+	return int32(version), parts[1], parts[2], nil
 }
 
 func signWebhook(secret string, body []byte) string {

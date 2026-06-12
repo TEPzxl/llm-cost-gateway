@@ -98,9 +98,9 @@ func (s *AdminTokenService) CreateAdminToken(ctx context.Context, params CreateA
 		return CreateAdminTokenResult{}, err
 	}
 
-	scopes := params.Scopes
-	if len(scopes) == 0 {
-		scopes = []string{"admin:*"}
+	scopes, err := normalizeAdminTokenScopes(params.Scopes)
+	if err != nil {
+		return CreateAdminTokenResult{}, err
 	}
 
 	token, err := generateToken(AdminTokenPlainPrefix)
@@ -127,6 +127,35 @@ func (s *AdminTokenService) CreateAdminToken(ctx context.Context, params CreateA
 		AdminToken: adminToken,
 		Token:      token,
 	}, nil
+}
+
+func normalizeAdminTokenScopes(scopes []string) ([]string, error) {
+	if len(scopes) == 0 {
+		return []string{AdminScopeAll}, nil
+	}
+
+	allowed := map[string]struct{}{
+		AdminScopeAll:                 {},
+		AdminScopeMembersManage:       {},
+		AdminScopeMembersView:         {},
+		AdminScopeTokensManage:        {},
+		AdminScopeConfigurationManage: {},
+		AdminScopeView:                {},
+	}
+	normalized := make([]string, 0, len(scopes))
+	seen := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		scope = strings.TrimSpace(scope)
+		if _, ok := allowed[scope]; !ok {
+			return nil, fmt.Errorf("unsupported admin token scope %q", scope)
+		}
+		if _, ok := seen[scope]; ok {
+			continue
+		}
+		seen[scope] = struct{}{}
+		normalized = append(normalized, scope)
+	}
+	return normalized, nil
 }
 
 func (s *AdminTokenService) Authenticate(ctx context.Context, token string) (AdminTokenPrincipal, error) {

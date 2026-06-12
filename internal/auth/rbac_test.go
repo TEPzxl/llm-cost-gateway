@@ -48,7 +48,8 @@ func TestAPIKeyPrincipalScopes(t *testing.T) {
 		want   bool
 	}{
 		{name: "exact scope", scopes: []string{APIKeyScopeChatCompletions}, want: true},
-		{name: "wildcard scope", scopes: []string{"chat.*"}, want: true},
+		{name: "wildcard scope is not accepted for api keys", scopes: []string{"chat.*"}, want: false},
+		{name: "global wildcard is not accepted for api keys", scopes: []string{"*"}, want: false},
 		{name: "wrong separator", scopes: []string{"chat:completions"}, want: false},
 		{name: "empty scopes", scopes: nil, want: false},
 	}

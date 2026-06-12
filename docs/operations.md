@@ -119,7 +119,7 @@ make console-build
 
 ## Provider Secret 密钥轮换
 
-Provider API Key 使用 AES-GCM 加密，并通过 `provider_secrets.key_version` 记录密钥版本。Admin Token、Gateway API Key、user session 和 magic link token 支持 `TOKEN_HASH_SECRET_KEYRING` 双读单写。轮换前先配置 `SECRET_ENCRYPTION_KEY_VERSION`、`SECRET_ENCRYPTION_KEYRING`、`TOKEN_HASH_SECRET_VERSION` 和 `TOKEN_HASH_SECRET_KEYRING`，再执行 dry-run：
+Provider API Key 和 Budget Alert webhook secret 使用 AES-GCM 加密；密钥轮换 CLI 会扫描并重新加密 Provider secret 与 webhook secret。Admin Token、Gateway API Key、user session 和 magic link token 支持 `TOKEN_HASH_SECRET_KEYRING` 双读单写。轮换前先配置 `SECRET_ENCRYPTION_KEY_VERSION`、`SECRET_ENCRYPTION_KEYRING`、`TOKEN_HASH_SECRET_VERSION` 和 `TOKEN_HASH_SECRET_KEYRING`，再执行 dry-run：
 
 ```bash
 go run ./cmd/secret-rotate -config configs/config.example.yaml -dry-run

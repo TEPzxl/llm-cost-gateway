@@ -125,7 +125,7 @@ func WithPublicOutboundOnly(enabled bool) ChatServiceOption {
 		s.publicOutboundOnly = enabled
 		if enabled {
 			s.registry = provider.NewRegistry(provider.WithRegistryPublicOutboundOnly(true))
-			s.alerts = budget.NewAlertService(s.store, budget.WithAlertPublicOutboundOnly(true))
+			s.alerts = budget.NewAlertService(s.store, budget.WithAlertPublicOutboundOnly(true), budget.WithAlertSecretKeyRing(s.secretKeyRing))
 		}
 	}
 }
@@ -134,6 +134,7 @@ func WithSecretKeyRing(keyRing *secretcrypto.SecretKeyRing) ChatServiceOption {
 	return func(s *ChatService) {
 		if keyRing != nil {
 			s.secretKeyRing = keyRing
+			s.alerts = budget.NewAlertService(s.store, budget.WithAlertPublicOutboundOnly(s.publicOutboundOnly), budget.WithAlertSecretKeyRing(keyRing))
 		}
 	}
 }
@@ -234,7 +235,7 @@ func NewChatService(st *store.Store, secretEncryptionKey string, metrics *observ
 		resolver:            routing.NewResolver(st.Queries),
 		registry:            provider.NewRegistry(),
 		budgets:             budget.NewService(st.Queries),
-		alerts:              budget.NewAlertService(st),
+		alerts:              budget.NewAlertService(st, budget.WithAlertSecretKeyRing(keyRing)),
 		anomalies:           anomaly.NewService(st),
 		apiKeyQuotas:        auth.NewAPIKeyQuotaService(st.Queries),
 		costReservations:    limits.NewReservationService(st),

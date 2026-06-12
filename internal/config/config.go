@@ -527,6 +527,9 @@ func validateProductionConfig(c Config) error {
 	if c.SecretEncryptionKey == "0123456789abcdef0123456789abcdef" {
 		return fmt.Errorf("SECRET_ENCRYPTION_KEY must not use the example key in production")
 	}
+	if !c.OutboundPublicOnly {
+		return fmt.Errorf("OUTBOUND_PUBLIC_ONLY must be enabled in production")
+	}
 	parsed, err := url.Parse(c.DatabaseURL)
 	if err != nil {
 		return fmt.Errorf("DATABASE_URL must be a valid URL: %w", err)

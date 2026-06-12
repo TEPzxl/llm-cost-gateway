@@ -3,7 +3,18 @@
 .agent
 .superpowers/
 
-docs/
+docs/*
+!docs/api.md
+!docs/operations.md
+!docs/demo.md
+!docs/runbooks/
+!docs/runbooks/production-launch.md
+!docs/runbooks/rollback.md
+!docs/00_MASTER_SDD.md
+!docs/01_PHASE_1_V0_1_SAAS_MVP.md
+!docs/02_PHASE_2_V0_2_PRODUCTION_READY.md
+!docs/03_PHASE_3_V0_3_COSTOPS_PLATFORM.md
+!docs/10_PRODUCTION_READINESS_SDD.md
 
 node_modules/
 dist/

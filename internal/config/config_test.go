@@ -341,6 +341,12 @@ func TestLoadRejectsUnsafeProductionConfig(t *testing.T) {
 				"DATABASE_URL": "postgres://llmgw:llmgw@example.com:5432/llmgw?sslmode=disable",
 			},
 		},
+		{
+			name: "public outbound guard disabled",
+			env: map[string]string{
+				"OUTBOUND_PUBLIC_ONLY": "false",
+			},
+		},
 	}
 
 	for _, tt := range tests {

@@ -2,7 +2,7 @@
 
 ## 适用范围
 
-本文档覆盖 Provider API Key 的加密密钥轮换，以及 Admin Token、Gateway API Key、user session、magic link token 的 hash secret 双读单写轮换。
+本文档覆盖 Provider API Key 与 Budget Alert webhook secret 的加密密钥轮换，以及 Admin Token、Gateway API Key、user session、magic link token 的 hash secret 双读单写轮换。
 
 ## 配置
 
@@ -28,7 +28,7 @@ token_hash_secret_version: 2
 token_hash_secret_keyring: "1:old-token-hash-secret,2:new-token-hash-secret"
 ```
 
-生产环境必须保证 active version 存在于 keyring 中。旧 version 在所有 Provider secret 完成 re-encryption 之前不能删除。
+生产环境必须保证 active version 存在于 keyring 中。旧 version 在所有 Provider secret 和 webhook secret 完成 re-encryption 之前不能删除。
 
 Token hash secret 轮换采用双读单写：
 
@@ -53,7 +53,7 @@ go run ./cmd/secret-rotate \
   -dry-run
 ```
 
-CLI 只输出数量摘要，不输出 Provider API Key 明文。
+CLI 分别输出 Provider secret 和 webhook secret 的数量摘要，不输出任何 secret 明文。
 
 ## 实际轮换
 

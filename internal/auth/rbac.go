@@ -86,7 +86,16 @@ func (p AdminTokenPrincipal) CanView() bool {
 }
 
 func (p APIKeyPrincipal) HasScope(scope string) bool {
-	return scopesAllow(p.Scopes, scope)
+	required := strings.TrimSpace(scope)
+	if required == "" {
+		return false
+	}
+	for _, item := range p.Scopes {
+		if strings.TrimSpace(item) == required {
+			return true
+		}
+	}
+	return false
 }
 
 func scopesAllow(scopes []string, required string) bool {

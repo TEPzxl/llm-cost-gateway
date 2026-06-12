@@ -93,9 +93,9 @@ func (s *APIKeyService) CreateAPIKey(ctx context.Context, params CreateAPIKeyPar
 		return CreateAPIKeyResult{}, err
 	}
 
-	scopes := params.Scopes
-	if len(scopes) == 0 {
-		scopes = []string{"chat.completions"}
+	scopes, err := normalizeAPIKeyScopes(params.Scopes)
+	if err != nil {
+		return CreateAPIKeyResult{}, err
 	}
 
 	key, err := generateToken(APIKeyPlainPrefix)
@@ -126,6 +126,27 @@ func (s *APIKeyService) CreateAPIKey(ctx context.Context, params CreateAPIKeyPar
 		APIKey: apiKey,
 		Key:    key,
 	}, nil
+}
+
+func normalizeAPIKeyScopes(scopes []string) ([]string, error) {
+	if len(scopes) == 0 {
+		return []string{APIKeyScopeChatCompletions}, nil
+	}
+
+	normalized := make([]string, 0, len(scopes))
+	seen := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		scope = strings.TrimSpace(scope)
+		if scope != APIKeyScopeChatCompletions {
+			return nil, fmt.Errorf("unsupported api key scope %q", scope)
+		}
+		if _, ok := seen[scope]; ok {
+			continue
+		}
+		seen[scope] = struct{}{}
+		normalized = append(normalized, scope)
+	}
+	return normalized, nil
 }
 
 func (s *APIKeyService) ListAPIKeys(ctx context.Context, orgID uuid.UUID) ([]db.ApiKey, error) {

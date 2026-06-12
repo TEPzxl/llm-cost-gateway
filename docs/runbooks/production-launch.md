@@ -24,7 +24,7 @@
 | `TOKEN_HASH_SECRET` | 非默认强密钥 |  |  |  |
 | `TOKEN_HASH_SECRET_KEYRING` | 包含 active version，旧版本在 grace period 内保留 |  |  |  |
 | `SECRET_ENCRYPTION_KEY` | 32 字节强密钥 |  |  |  |
-| `SECRET_ENCRYPTION_KEYRING` | 包含 active version，可解密旧 Provider secret |  |  |  |
+| `SECRET_ENCRYPTION_KEYRING` | 包含 active version，可解密旧 Provider secret 与 webhook secret |  |  |  |
 | `AUTH_PASSWORDLESS_EMAIL_ENABLED` | 生产启用真实邮件登录 |  |  |  |
 | `AUTH_MAGIC_LINK_BASE_URL` | HTTPS Console URL |  |  |  |
 | SMTP 配置 | host、port、username、password、from、TLS mode 完整 |  |  |  |

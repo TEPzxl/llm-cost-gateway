@@ -171,11 +171,16 @@ func recordProviderSpanError(span trace.Span, errorCode string, err error) {
 }
 
 type upstreamRequest struct {
-	Model       string                 `json:"model"`
-	Messages    []contract.ChatMessage `json:"messages"`
-	Temperature *float64               `json:"temperature,omitempty"`
-	MaxTokens   *int                   `json:"max_tokens,omitempty"`
-	Stream      bool                   `json:"stream"`
+	Model         string                 `json:"model"`
+	Messages      []contract.ChatMessage `json:"messages"`
+	Temperature   *float64               `json:"temperature,omitempty"`
+	MaxTokens     *int                   `json:"max_tokens,omitempty"`
+	Stream        bool                   `json:"stream"`
+	StreamOptions *streamOptions         `json:"stream_options,omitempty"`
+}
+
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type upstreamResponse struct {

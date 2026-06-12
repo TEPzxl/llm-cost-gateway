@@ -3,16 +3,59 @@ package budget
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	secretcrypto "github.com/tep/llm-cost-gateway/internal/crypto"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 )
+
+func TestWebhookSecretEnvelopeEncryptsAndDecrypts(t *testing.T) {
+	keyRing, err := secretcrypto.NewSingleKeyRing("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("NewSingleKeyRing returned error: %v", err)
+	}
+
+	stored, err := SealWebhookSecret(keyRing, " secret ")
+	if err != nil {
+		t.Fatalf("sealWebhookSecret returned error: %v", err)
+	}
+	if !stored.Valid {
+		t.Fatal("sealed webhook secret is invalid")
+	}
+	if stored.String == "secret" || strings.Contains(stored.String, ":secret") {
+		t.Fatalf("sealed webhook secret = %q, contains plaintext", stored.String)
+	}
+	if !strings.HasPrefix(stored.String, encryptedWebhookSecretPrefix) {
+		t.Fatalf("sealed webhook secret = %q, want encrypted envelope prefix", stored.String)
+	}
+
+	opened, err := OpenWebhookSecret(keyRing, stored)
+	if err != nil {
+		t.Fatalf("openWebhookSecret returned error: %v", err)
+	}
+	if opened != "secret" {
+		t.Fatalf("opened webhook secret = %q, want secret", opened)
+	}
+}
+
+func TestWebhookSecretEnvelopeSupportsLegacyPlaintext(t *testing.T) {
+	stored := nullableText(" legacy-secret ")
+	opened, err := OpenWebhookSecret(nil, stored)
+	if err != nil {
+		t.Fatalf("openWebhookSecret returned error: %v", err)
+	}
+	if opened != "legacy-secret" {
+		t.Fatalf("opened webhook secret = %q, want legacy-secret", opened)
+	}
+}
 
 func TestValidateWebhookURLRejectsUnsafePublicOutboundURL(t *testing.T) {
 	if err := validateWebhookURL("https://127.0.0.1/hook", true); err == nil {
@@ -31,9 +74,17 @@ func TestAlertServiceDeliversThresholdOnceAndNextThresholdLater(t *testing.T) {
 	var signatures []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		signatures = append(signatures, r.Header.Get("X-LLMGW-Signature"))
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read webhook payload: %v", err)
+		}
+		signature := r.Header.Get("X-LLMGW-Signature")
+		if signature != signWebhook("secret", body) {
+			t.Fatalf("signature = %q, want signature for decrypted secret", signature)
+		}
+		signatures = append(signatures, signature)
 		var payload webhookPayload
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		if err := json.Unmarshal(body, &payload); err != nil {
 			t.Fatalf("decode webhook payload: %v", err)
 		}
 		if payload.OrgID != orgID || payload.Threshold == 0 || payload.UsedMicroUSD == 0 {
@@ -55,15 +106,23 @@ func TestAlertServiceDeliversThresholdOnceAndNextThresholdLater(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBudget returned error: %v", err)
 	}
-	alertService := NewAlertService(st, WithAlertClock(func() time.Time { return now }))
-	if _, err := alertService.CreateAlert(ctx, CreateAlertParams{
+	keyRing, err := secretcrypto.NewSingleKeyRing("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("NewSingleKeyRing returned error: %v", err)
+	}
+	alertService := NewAlertService(st, WithAlertClock(func() time.Time { return now }), WithAlertSecretKeyRing(keyRing))
+	createdAlert, err := alertService.CreateAlert(ctx, CreateAlertParams{
 		OrgID:         orgID,
 		BudgetID:      budgetItem.ID,
 		WebhookURL:    server.URL,
 		WebhookSecret: "secret",
 		Status:        StatusActive,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("CreateAlert returned error: %v", err)
+	}
+	if !createdAlert.WebhookSecret.Valid || createdAlert.WebhookSecret.String == "secret" {
+		t.Fatalf("stored webhook secret = %+v, want encrypted value", createdAlert.WebhookSecret)
 	}
 
 	insertBudgetCost(t, ctx, st, fixture, 800, now.Add(-time.Hour))

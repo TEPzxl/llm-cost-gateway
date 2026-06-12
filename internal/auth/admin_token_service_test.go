@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +11,38 @@ import (
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 	"github.com/tep/llm-cost-gateway/internal/testutil"
 )
+
+func TestNormalizeAdminTokenScopesDefaultsAndRejectsUnsupportedScopes(t *testing.T) {
+	defaultScopes, err := normalizeAdminTokenScopes(nil)
+	if err != nil {
+		t.Fatalf("normalizeAdminTokenScopes default returned error: %v", err)
+	}
+	if len(defaultScopes) != 1 || defaultScopes[0] != AdminScopeAll {
+		t.Fatalf("default scopes = %+v, want [%s]", defaultScopes, AdminScopeAll)
+	}
+
+	validScopes := []string{" " + AdminScopeMembersView + " ", AdminScopeMembersManage, AdminScopeMembersView}
+	normalized, err := normalizeAdminTokenScopes(validScopes)
+	if err != nil {
+		t.Fatalf("normalizeAdminTokenScopes valid returned error: %v", err)
+	}
+	want := []string{AdminScopeMembersView, AdminScopeMembersManage}
+	if len(normalized) != len(want) {
+		t.Fatalf("normalized scopes = %+v, want %+v", normalized, want)
+	}
+	for i := range want {
+		if normalized[i] != want[i] {
+			t.Fatalf("normalized scopes = %+v, want %+v", normalized, want)
+		}
+	}
+
+	for _, scope := range []string{"*", "admin:billing:manage", "admin:**", ""} {
+		_, err := normalizeAdminTokenScopes([]string{scope})
+		if err == nil || !strings.Contains(err.Error(), "unsupported admin token scope") {
+			t.Fatalf("normalizeAdminTokenScopes(%q) error = %v, want unsupported scope error", scope, err)
+		}
+	}
+}
 
 func TestAdminTokenServiceCreatesAndAuthenticatesToken(t *testing.T) {
 	ctx := context.Background()

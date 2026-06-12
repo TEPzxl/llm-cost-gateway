@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +10,31 @@ import (
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 	"github.com/tep/llm-cost-gateway/internal/testutil"
 )
+
+func TestNormalizeAPIKeyScopesDefaultsAndRejectsUnsupportedScopes(t *testing.T) {
+	defaultScopes, err := normalizeAPIKeyScopes(nil)
+	if err != nil {
+		t.Fatalf("normalizeAPIKeyScopes default returned error: %v", err)
+	}
+	if len(defaultScopes) != 1 || defaultScopes[0] != APIKeyScopeChatCompletions {
+		t.Fatalf("default scopes = %+v, want [%s]", defaultScopes, APIKeyScopeChatCompletions)
+	}
+
+	normalized, err := normalizeAPIKeyScopes([]string{" " + APIKeyScopeChatCompletions + " ", APIKeyScopeChatCompletions})
+	if err != nil {
+		t.Fatalf("normalizeAPIKeyScopes valid returned error: %v", err)
+	}
+	if len(normalized) != 1 || normalized[0] != APIKeyScopeChatCompletions {
+		t.Fatalf("normalized scopes = %+v, want deduplicated [%s]", normalized, APIKeyScopeChatCompletions)
+	}
+
+	for _, scope := range []string{"chat:completions", "*", "chat.*", ""} {
+		_, err := normalizeAPIKeyScopes([]string{scope})
+		if err == nil || !strings.Contains(err.Error(), "unsupported api key scope") {
+			t.Fatalf("normalizeAPIKeyScopes(%q) error = %v, want unsupported scope error", scope, err)
+		}
+	}
+}
 
 func TestAPIKeyServiceCreatesAndAuthenticatesKey(t *testing.T) {
 	ctx := context.Background()
@@ -91,6 +117,42 @@ func TestAPIKeyServiceAuthenticatesKeyHashedWithOldSecret(t *testing.T) {
 	}
 	if principal.APIKeyID != created.APIKey.ID {
 		t.Fatalf("principal api key id = %s, want %s", principal.APIKeyID, created.APIKey.ID)
+	}
+}
+
+func TestAPIKeyServiceRejectsUnsupportedScope(t *testing.T) {
+	ctx := context.Background()
+	st := openAPIKeyTestStore(t, ctx)
+	resetAuthTestDatabase(t, ctx, st)
+	org := createAuthTestOrganization(t, ctx, st, "auth-api-key-scope")
+
+	service := NewAPIKeyService(st.Queries, "token-hash-secret")
+	_, err := service.CreateAPIKey(ctx, CreateAPIKeyParams{
+		OrgID:    org.ID,
+		Name:     "bad-scope-key",
+		Scopes:   []string{"chat:completions"},
+		RPMLimit: 60,
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported api key scope") {
+		t.Fatalf("CreateAPIKey error = %v, want unsupported scope error", err)
+	}
+}
+
+func TestAPIKeyServiceRejectsWildcardScope(t *testing.T) {
+	ctx := context.Background()
+	st := openAPIKeyTestStore(t, ctx)
+	resetAuthTestDatabase(t, ctx, st)
+	org := createAuthTestOrganization(t, ctx, st, "auth-api-key-wildcard-scope")
+
+	service := NewAPIKeyService(st.Queries, "token-hash-secret")
+	_, err := service.CreateAPIKey(ctx, CreateAPIKeyParams{
+		OrgID:    org.ID,
+		Name:     "wildcard-key",
+		Scopes:   []string{"*"},
+		RPMLimit: 60,
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported api key scope") {
+		t.Fatalf("CreateAPIKey error = %v, want unsupported scope error", err)
 	}
 }
 

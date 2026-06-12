@@ -6,12 +6,78 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/tep/llm-cost-gateway/internal/budget"
 	secretcrypto "github.com/tep/llm-cost-gateway/internal/crypto"
 	"github.com/tep/llm-cost-gateway/internal/provider"
 	"github.com/tep/llm-cost-gateway/internal/store"
 	db "github.com/tep/llm-cost-gateway/internal/store/sqlc"
 	"github.com/tep/llm-cost-gateway/internal/testutil"
 )
+
+func TestReencryptWebhookSecretValueRotatesPlaintextAndOldKeyVersions(t *testing.T) {
+	oldRing, err := secretcrypto.NewSecretKeyRing(1, map[int32]string{
+		1: "0123456789abcdef0123456789abcdef",
+		2: "fedcba98765432100123456789abcdef",
+	})
+	if err != nil {
+		t.Fatalf("NewSecretKeyRing old returned error: %v", err)
+	}
+	activeRing, err := secretcrypto.NewSecretKeyRing(2, map[int32]string{
+		1: "0123456789abcdef0123456789abcdef",
+		2: "fedcba98765432100123456789abcdef",
+	})
+	if err != nil {
+		t.Fatalf("NewSecretKeyRing active returned error: %v", err)
+	}
+
+	plaintext := pgtype.Text{String: " legacy-secret ", Valid: true}
+	rotated, changed, err := reencryptWebhookSecretValue(activeRing, plaintext)
+	if err != nil {
+		t.Fatalf("reencryptWebhookSecretValue plaintext returned error: %v", err)
+	}
+	if !changed || rotated.String == plaintext.String {
+		t.Fatalf("plaintext rotated = %+v changed=%t, want encrypted changed value", rotated, changed)
+	}
+	opened, err := budget.OpenWebhookSecret(activeRing, rotated)
+	if err != nil {
+		t.Fatalf("OpenWebhookSecret plaintext rotated returned error: %v", err)
+	}
+	if opened != "legacy-secret" {
+		t.Fatalf("opened plaintext rotated = %q, want legacy-secret", opened)
+	}
+
+	oldStored, err := budget.SealWebhookSecret(oldRing, "webhook-secret")
+	if err != nil {
+		t.Fatalf("SealWebhookSecret old returned error: %v", err)
+	}
+	rotated, changed, err = reencryptWebhookSecretValue(activeRing, oldStored)
+	if err != nil {
+		t.Fatalf("reencryptWebhookSecretValue old returned error: %v", err)
+	}
+	if !changed || rotated.String == oldStored.String {
+		t.Fatalf("old version rotated = %+v changed=%t, want changed value", rotated, changed)
+	}
+	version, encrypted, err := budget.WebhookSecretKeyVersion(rotated)
+	if err != nil {
+		t.Fatalf("WebhookSecretKeyVersion rotated returned error: %v", err)
+	}
+	if !encrypted || version != activeRing.ActiveVersion() {
+		t.Fatalf("rotated version encrypted=%t version=%d, want active version %d", encrypted, version, activeRing.ActiveVersion())
+	}
+
+	activeStored, err := budget.SealWebhookSecret(activeRing, "webhook-secret")
+	if err != nil {
+		t.Fatalf("SealWebhookSecret active returned error: %v", err)
+	}
+	unchanged, changed, err := reencryptWebhookSecretValue(activeRing, activeStored)
+	if err != nil {
+		t.Fatalf("reencryptWebhookSecretValue active returned error: %v", err)
+	}
+	if changed || unchanged.String != activeStored.String {
+		t.Fatalf("active version changed=%t value=%+v, want unchanged %+v", changed, unchanged, activeStored)
+	}
+}
 
 func TestSecretRotationServiceDryRunAndReencryptProviderSecrets(t *testing.T) {
 	ctx := context.Background()

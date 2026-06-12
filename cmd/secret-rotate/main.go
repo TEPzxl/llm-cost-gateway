@@ -53,14 +53,23 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	result, err := rotation.NewSecretRotationService(st, keyRing).ReencryptProviderSecrets(ctx, rotation.ReencryptProviderSecretsParams{
+	service := rotation.NewSecretRotationService(st, keyRing)
+	providerResult, err := service.ReencryptProviderSecrets(ctx, rotation.ReencryptProviderSecretsParams{
 		OrgID:  opts.orgID,
 		DryRun: opts.dryRun,
 	})
 	if err != nil {
 		return err
 	}
-	fmt.Printf("provider secrets scanned=%d rotated=%d skipped=%d dry_run=%t\n", result.Scanned, result.Rotated, result.Skipped, result.DryRun)
+	webhookResult, err := service.ReencryptWebhookSecrets(ctx, rotation.ReencryptWebhookSecretsParams{
+		OrgID:  opts.orgID,
+		DryRun: opts.dryRun,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("provider secrets scanned=%d rotated=%d skipped=%d dry_run=%t\n", providerResult.Scanned, providerResult.Rotated, providerResult.Skipped, providerResult.DryRun)
+	fmt.Printf("webhook secrets scanned=%d rotated=%d skipped=%d dry_run=%t\n", webhookResult.Scanned, webhookResult.Rotated, webhookResult.Skipped, webhookResult.DryRun)
 	return nil
 }
 
