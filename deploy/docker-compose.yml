@@ -26,7 +26,7 @@ services:
       retries: 20
 
   kafka:
-    image: bitnami/kafka:3.7
+    image: soldevelo/kafka:3.7
     profiles: ["events"]
     environment:
       KAFKA_ENABLE_KRAFT: "yes"
